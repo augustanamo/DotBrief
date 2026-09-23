@@ -5,5 +5,8 @@
     <color name="pure_white">#FFFFFFFF</color>
 
     <color name="surface">#FFFFFFFF</color>
-    <color name="ic_launcher_background">#FF000000</color>
+
+    <!-- 图标底色**故意不是纯黑**：与小组件那枚点阵的底色（DotMatrixArt.COLOR_BACKGROUND）
+         取同一个值。两者在桌面上是并排出现的，差一点点就会看出来"两个黑不一样"。 -->
+    <color name="ic_launcher_background">#FF0B0B0A</color>
 </resources>

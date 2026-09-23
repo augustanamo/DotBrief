@@ -10,8 +10,12 @@
     这样在系统的小组件选择器里看到的就是桌面上的样子。
     注意没有配 previewLayout：布局里那张点阵图是运行时由 RemoteViews 塞进去的，
     直接用布局当预览会是一块空白。
-  - targetCellWidth/Height=3：给 Android 12+ 的桌面一个默认占位建议，
-    minWidth/minHeight 保留给老版本（110dp ≈ 2 格，可自由 resize）。
+  - targetCellWidth/Height=2：给 Android 12+ 的桌面一个默认占位建议。
+    原来是 3x3，用户反馈"太大"—— 这枚组件整块只有一枚点阵，3 格宽的位置上
+    点阵四周全是空的，而 2x2 正好把它框住。minWidth/minHeight 保留给老版本
+    （110dp ≈ 2 格，可自由 resize）。
+    注意：改默认占位**不会**动桌面上已有的实例，它们保持原尺寸，
+    想换小得手动拖右下角，或者删掉重新从组件列表拖一个。
 -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/widget_description"
@@ -20,7 +24,7 @@
     android:minWidth="110dp"
     android:previewImage="@drawable/widget_preview"
     android:resizeMode="horizontal|vertical"
-    android:targetCellHeight="3"
-    android:targetCellWidth="3"
+    android:targetCellHeight="2"
+    android:targetCellWidth="2"
     android:updatePeriodMillis="0"
     android:widgetCategory="home_screen" />

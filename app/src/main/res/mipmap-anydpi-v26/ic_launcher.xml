@@ -1,6 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  自适应图标的三层。
+
+  - background：与桌面小组件的黑底取同一个值（#0B0B0A，见 colors.xml）——
+    两者并排出现在桌面上时，不该是两个深浅不同的黑。
+  - foreground：点阵场 + 高亮构成的 D，由 tools/gen_launcher_icon.py 按
+    DotMatrixArt 的同一套规则算出（那个脚本里写了为什么是 15 格而不是组件的 19 格）。
+  - monochrome：**单独一份只画 D 的**，不能复用 foreground ——
+    单色层只保留形状与透明度，整片暗场点会被系统涂成一坨、把字母淹掉。
+-->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@color/ic_launcher_background" />
     <foreground android:drawable="@drawable/ic_launcher_foreground" />
-    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_monochrome" />
 </adaptive-icon>
