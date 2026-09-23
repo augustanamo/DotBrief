@@ -1,0 +1,97 @@
+#
+# 版本目录（Gradle Version Catalog）
+# 所有依赖统一在此处声明版本，app/build.gradle.kts 只引用别名，避免版本散落。
+#
+# 工具链锁定说明：本工程锁定 AGP 8.5.2 + Gradle 8.7 + Kotlin 1.9.24 + compileSdk 34
+# （与本机已安装的 platforms;android-34 / build-tools;34.0.0 一致，可离线复现构建）。
+# 若日后升到 AGP 9.x，需同步把 Gradle 提到 >= 9.3.1 并把 composeOptions 换成
+# org.jetbrains.kotlin.plugin.compose 插件（Kotlin 2.x 起编译器内置）。
+#
+[versions]
+agp = "8.5.2"
+kotlin = "1.9.24"
+ksp = "1.9.24-1.0.20"
+composeCompiler = "1.5.14"
+
+# AndroidX 基础
+coreKtx = "1.13.1"
+lifecycle = "2.8.4"
+activityCompose = "1.9.0"
+composeBom = "2024.06.00"
+
+# 存储
+datastore = "1.1.1"
+room = "2.6.1"
+
+# 网络与序列化
+okhttp = "4.12.0"
+retrofit = "2.11.0"
+retrofitSerialization = "1.0.0"
+kotlinxSerialization = "1.6.3"
+coroutines = "1.8.1"
+
+# RSS 解析
+rssparser = "6.0.6"
+
+# 后台任务与桌面小组件
+work = "2.9.0"
+glance = "1.1.0"
+
+# 测试
+junit = "4.13.2"
+androidxTestJunit = "1.2.1"
+espresso = "3.6.1"
+
+[libraries]
+# ---------- AndroidX 基础 ----------
+androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
+androidx-lifecycle-runtime-ktx = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "lifecycle" }
+androidx-lifecycle-viewmodel-ktx = { module = "androidx.lifecycle:lifecycle-viewmodel-ktx", version.ref = "lifecycle" }
+androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+
+# ---------- Compose ----------
+androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
+androidx-compose-ui = { module = "androidx.compose.ui:ui" }
+androidx-compose-ui-graphics = { module = "androidx.compose.ui:ui-graphics" }
+androidx-compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
+androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
+androidx-compose-material3 = { module = "androidx.compose.material3:material3" }
+androidx-compose-material-icons-core = { module = "androidx.compose.material:material-icons-core" }
+
+# ---------- DataStore（配置与 Key 固化）----------
+androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
+
+# ---------- Room（行程 / 快递 / 简报历史）----------
+androidx-room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
+androidx-room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }
+androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
+
+# ---------- 网络与 JSON ----------
+okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
+okhttp-logging = { module = "com.squareup.okhttp3:logging-interceptor", version.ref = "okhttp" }
+retrofit = { module = "com.squareup.retrofit2:retrofit", version.ref = "retrofit" }
+retrofit-kotlinx-serialization = { module = "com.jakewharton.retrofit:retrofit2-kotlinx-serialization-converter", version.ref = "retrofitSerialization" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
+kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+
+# ---------- RSS ----------
+rssparser = { module = "com.prof18.rssparser:rssparser", version.ref = "rssparser" }
+
+# ---------- WorkManager ----------
+androidx-work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
+
+# ---------- Jetpack Glance（桌面小组件）----------
+androidx-glance-appwidget = { module = "androidx.glance:glance-appwidget", version.ref = "glance" }
+androidx-glance-material3 = { module = "androidx.glance:glance-material3", version.ref = "glance" }
+
+# ---------- 测试 ----------
+junit = { module = "junit:junit", version.ref = "junit" }
+androidx-test-junit = { module = "androidx.test.ext:junit", version.ref = "androidxTestJunit" }
+androidx-espresso-core = { module = "androidx.test.espresso:espresso-core", version.ref = "espresso" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }

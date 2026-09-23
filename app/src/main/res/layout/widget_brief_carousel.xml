@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  霓虹轮播布局：结构与 widget_brief_playing.xml 完全相同，只有翻转间隔不同。
+
+  为什么要单独一份："播报"和"轮播"对节奏的要求是相反的。
+  - 播报：14 帧 170ms，一个呼吸周期 2.4s，接近人的自然呼吸，越快越像"活着"；
+  - 轮播：同样的 14 帧如果也用 170ms，一个彩虹周期只要 2.4s，色相会快到糊成一片，
+    而且 AdapterViewFlipper 的淡入淡出动画（约 200ms）比翻转间隔还长 ——
+    每帧都来不及淡入到全不透明就被下一帧顶掉，结果是整块点阵一直蒙着一层灰。
+
+  所以轮播单独用 260ms/帧（与 DotMatrixArt.CAROUSEL_FRAME_INTERVAL_MS 保持一致，
+  改一个必须改另一个）：一帧淡入淡出走完还能留一小段静止。
+  一圈色环的时长不靠这个间隔调，而是靠**帧数**（28 / 42 / 56 帧，见 CarouselPace），
+  因为帧间隔不能远程改、帧数可以。默认 42 帧 ≈ 11 秒转完一圈。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <ImageView
+        android:id="@+id/widget_static"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_gravity="center"
+        android:contentDescription="@string/widget_description"
+        android:scaleType="fitCenter" />
+
+    <!-- 不要写 inAnimation/outAnimation：@android:anim/* 是补间动画，会抛
+         "Unknown animator name"，导致布局 inflate 失败。留空用系统内置的 ObjectAnimator。 -->
+    <AdapterViewFlipper
+        android:id="@+id/widget_flipper"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_gravity="center"
+        android:autoStart="true"
+        android:flipInterval="260"
+        android:clickable="false"
+        android:longClickable="false" />
+
+    <!-- 没有字幕，点阵本身就是全部表达。见 widget_brief.xml 里的说明。 -->
+
+    <!-- 透明点击层：普通 ViewGroup 才能挂 setOnClickPendingIntent（AdapterView 会抛异常），
+         且必须是 RemoteViews 白名单里的类 —— 不能写成 <View>。 -->
+    <FrameLayout
+        android:id="@+id/widget_tap_target"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@android:color/transparent" />
+
+</FrameLayout>

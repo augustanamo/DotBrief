@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  待机布局（同时也是 appwidget-provider 的 initialLayout）。
+
+  这里**故意不放 AdapterViewFlipper**，原因是踩过一次坑：
+  RemoteViews 只能调用被 @android.view.RemotableViewMethod 标注过的方法，
+  而 AdapterViewFlipper 的 setAutoStart() / setFlipInterval() / startFlipping()
+  都没有这个注解 —— 用 setBoolean/setInt 去调会在桌面端抛 ActionException，
+  整份 RemoteViews 应用失败，小组件直接空白。
+
+  所以动效改成"换布局"来开关：待机用本文件（静态，零开销、零耗电），
+  播报时换成 widget_brief_playing.xml（flipper 靠 XML 属性 autoStart="true" 自启动）。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <ImageView
+        android:id="@+id/widget_static"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_gravity="center"
+        android:contentDescription="@string/widget_description"
+        android:scaleType="fitCenter" />
+
+    <!--
+      这里**不放任何文字**。
+
+      以前底部有一行小字幕（"点击播报" / "正在播报 · 再点打断"）。去掉的理由：
+      小组件的本体是那枚点阵，状态已经由**点阵本身**表达得很清楚了 ——
+      灰色静止 = 没有新东西，彩色静止 = 有新内容，流动 = 正在念。
+      再加一行字属于用第二套语言重复同一件事，而桌面寸土寸金，
+      那行字还正好压在点阵下沿。桌面上的图标已经够多了，能不说话就别说话。
+    -->
+
+    <!--
+      透明点击层：与 playing 布局保持一致，模板统一、代码只有一条路径。
+
+      **必须用 FrameLayout，不能图省事写 <View>。**
+      RemoteViews 在宿主侧 inflate 时会挂一个 LayoutInflater.Filter，
+      只放行被 @RemoteView 标注过的类；android.view.View 没有这个标注，
+      会直接抛 "Class not allowed to be inflated android.view.View"，
+      导致整份 RemoteViews 应用失败、小组件在桌面上变成「无法添加微件」的空槽。
+      FrameLayout 是白名单里的（几乎所有小组件都拿它当根布局）。
+
+      见 widget_brief_playing.xml 里对"为什么要多这一层"的说明。
+    -->
+    <FrameLayout
+        android:id="@+id/widget_tap_target"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@android:color/transparent" />
+
+</FrameLayout>

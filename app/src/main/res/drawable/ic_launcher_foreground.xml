@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 点阵风格图标：3x3 圆点，中列整列点亮，形似声波 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:translateX="27"
+        android:translateY="27">
+        <!-- 第 1 列 -->
+        <path android:fillAlpha="0.35" android:fillColor="#FFFFFFFF"
+            android:pathData="M9,9 m-4.5,0 a4.5,4.5 0 1,0 9,0 a4.5,4.5 0 1,0 -9,0" />
+        <path android:fillAlpha="0.75" android:fillColor="#FFFFFFFF"
+            android:pathData="M9,27 m-4.5,0 a4.5,4.5 0 1,0 9,0 a4.5,4.5 0 1,0 -9,0" />
+        <path android:fillAlpha="0.35" android:fillColor="#FFFFFFFF"
+            android:pathData="M9,45 m-4.5,0 a4.5,4.5 0 1,0 9,0 a4.5,4.5 0 1,0 -9,0" />
+        <!-- 第 2 列（主列） -->
+        <path android:fillColor="#FFFFFFFF"
+            android:pathData="M27,9 m-5.5,0 a5.5,5.5 0 1,0 11,0 a5.5,5.5 0 1,0 -11,0" />
+        <path android:fillColor="#FFFFFFFF"
+            android:pathData="M27,27 m-5.5,0 a5.5,5.5 0 1,0 11,0 a5.5,5.5 0 1,0 -11,0" />
+        <path android:fillColor="#FFFFFFFF"
+            android:pathData="M27,45 m-5.5,0 a5.5,5.5 0 1,0 11,0 a5.5,5.5 0 1,0 -11,0" />
+        <!-- 第 3 列 -->
+        <path android:fillAlpha="0.35" android:fillColor="#FFFFFFFF"
+            android:pathData="M45,9 m-4.5,0 a4.5,4.5 0 1,0 9,0 a4.5,4.5 0 1,0 -9,0" />
+        <path android:fillAlpha="0.75" android:fillColor="#FFFFFFFF"
+            android:pathData="M45,27 m-4.5,0 a4.5,4.5 0 1,0 9,0 a4.5,4.5 0 1,0 -9,0" />
+        <path android:fillAlpha="0.35" android:fillColor="#FFFFFFFF"
+            android:pathData="M45,45 m-4.5,0 a4.5,4.5 0 1,0 9,0 a4.5,4.5 0 1,0 -9,0" />
+    </group>
+</vector>

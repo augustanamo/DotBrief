@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  播报布局：在静态底图之上叠一层 AdapterViewFlipper，逐帧播放呼吸点阵。
+
+  关键点：**动画的开关全部由 XML 属性驱动，不通过 RemoteViews 方法调用**。
+
+  - android:autoStart="true"  → 构造时读进 mAutoStart，onAttachedToWindow() 里自调 startFlipping()；
+                                切到本布局就等于"开始播动画"，切走就等于"停下"。
+  - android:flipInterval="170" → 构造时读进 mFlipInterval。
+
+  这两个属性都在构造函数里被解析，早于 attach，所以不存在时序竞争；
+  也完全绕开了 setAutoStart/setFlipInterval 不可远程调用的问题。
+
+  底下的 widget_static 必须留着：RemoteViewsService 是异步绑定的，
+  帧还没送到的空窗期里如果只剩 flipper，小组件会闪一下全黑。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <ImageView
+        android:id="@+id/widget_static"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_gravity="center"
+        android:contentDescription="@string/widget_description"
+        android:scaleType="fitCenter" />
+
+    <!--
+      千万不要写 android:inAnimation="@android:anim/fade_in"。
+      AdapterViewAnimator 是用 AnimatorInflater 加载动画的（只认 <objectAnimator> 属性动画），
+      而 @android:anim/fade_in 是老的 <alpha> 补间动画，会直接抛
+      "RuntimeException: Unknown animator name: alpha" 导致整个布局 inflate 失败、
+      小组件在播报时卡住不动。留空即用系统内置的 ObjectAnimator 淡入淡出（更稳）。
+    -->
+    <AdapterViewFlipper
+        android:id="@+id/widget_flipper"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_gravity="center"
+        android:autoStart="true"
+        android:flipInterval="170"
+        android:clickable="false"
+        android:longClickable="false" />
+
+    <!-- 没有字幕，点阵本身就是全部表达。见 widget_brief.xml 里的说明。 -->
+
+    <!--
+      透明点击层，必须放在最后（= 在最上层）。
+
+      为什么要多这一层：AdapterView 禁止 setOnClickListener
+      （会抛 "Don't call setOnClickListener for an AdapterView"），
+      所以没法直接给 flipper 挂点击。而 flipper 铺满整块、又在最上层，
+      触摸事件很可能被它接走 —— 结果是"点了没反应"。
+
+      解决办法是让一层透明控件盖在最上面把所有触摸收掉：
+      它是普通 ViewGroup，setOnClickPendingIntent 完全合法，行为也确定。
+      点击目标绝不会随布局状态变化而失效。
+
+      **必须是 FrameLayout（白名单类），不能写 <View>。**
+      RemoteViews 在宿主侧 inflate 时只放行 @RemoteView 标注过的类，
+      android.view.View 会被拒："Class not allowed to be inflated android.view.View"，
+      整份 RemoteViews 随之应用失败 —— 桌面显示「无法添加微件」。
+    -->
+    <FrameLayout
+        android:id="@+id/widget_tap_target"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@android:color/transparent" />
+
+</FrameLayout>

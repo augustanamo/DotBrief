@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      壳主题：Compose 负责全部界面，这里只管窗口背景与系统栏。
+
+      状态栏固定纯黑，因为页面顶部那条 logotype 色带永远是纯黑（品牌规范里
+      logotype 只能黑白），两者同色才会连成一条完整的黑带，而不是"状态栏 + 色块"。
+      配合 windowLightStatusBar=false，状态栏图标保持白色。
+    -->
+    <style name="Theme.BriefWidget" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@color/pure_black</item>
+        <item name="android:navigationBarColor">@color/surface</item>
+        <item name="android:windowBackground">@color/surface</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

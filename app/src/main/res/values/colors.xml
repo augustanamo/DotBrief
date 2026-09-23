@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Nothing 品牌色板里的 Foundation 四色 + Primary 三色 -->
+    <color name="pure_black">#FF000000</color>
+    <color name="pure_white">#FFFFFFFF</color>
+
+    <color name="surface">#FFFFFFFF</color>
+    <color name="ic_launcher_background">#FF000000</color>
+</resources>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 暗色下窗口整体为纯黑：surface 在暗色主题里就是 #000000 -->
+    <style name="Theme.BriefWidget" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">@color/pure_black</item>
+        <item name="android:navigationBarColor">@color/pure_black</item>
+        <item name="android:windowBackground">@color/pure_black</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>
