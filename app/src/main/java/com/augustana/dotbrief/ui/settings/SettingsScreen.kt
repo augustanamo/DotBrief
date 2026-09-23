@@ -64,8 +64,6 @@ import com.augustana.dotbrief.R
 import com.augustana.dotbrief.data.settings.AccentColor
 import com.augustana.dotbrief.data.settings.BriefSource
 import com.augustana.dotbrief.data.settings.CarouselPace
-import com.augustana.dotbrief.data.settings.Defaults
-import com.augustana.dotbrief.data.settings.DoubaoApiVersion
 import com.augustana.dotbrief.data.settings.RssConfig
 import com.augustana.dotbrief.data.settings.RssFeed
 import com.augustana.dotbrief.data.settings.TtsConfig
@@ -141,6 +139,10 @@ fun SettingsScreen(
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     var showAddFeedDialog by remember { mutableStateOf(false) }
+
+    // 「恢复默认」必须先弹一次确认，理由见 ResetConfirmDialog 的注释 —— 这个按钮
+    // 和「保存配置」并排在同一行，误触的代价是连 API Key 一起清空。
+    var showResetConfirm by remember { mutableStateOf(false) }
 
     // 「高级设置」默认折叠 —— 但**没配好就自动展开**：
     // 一个刚装完的用户必须能找到 API Key 入口，而一个已经用了两周的用户
@@ -280,8 +282,9 @@ fun SettingsScreen(
 
             ActionBar(
                 saving = state.saving,
+                saveEnabled = state.loaded,
                 onSave = onSave,
-                onReset = onReset,
+                onReset = { showResetConfirm = true },
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
@@ -293,6 +296,16 @@ fun SettingsScreen(
             onConfirm = { name, url ->
                 onAddFeed(name, url)
                 showAddFeedDialog = false
+            },
+        )
+    }
+
+    if (showResetConfirm) {
+        ResetConfirmDialog(
+            onDismiss = { showResetConfirm = false },
+            onConfirm = {
+                onReset()
+                showResetConfirm = false
             },
         )
     }
@@ -1112,6 +1125,54 @@ private fun AddFeedDialog(
     )
 }
 
+/**
+ * 「恢复默认」的二次确认。
+ *
+ * 为什么非要有这一下：它和「保存配置」是同一行里并排的两个按钮，落错一下
+ * 就足以把整份配置清空 —— 这件事真的发生过一次，连同 API Key 一起没了，
+ * 而 Key 是清理之后最难补回来的那类东西（得回控制台重新复制）。
+ * 破坏性操作的门槛应该是"多按一下"，不是"别按错"。
+ *
+ * 文案里点名 API Key，而不写笼统的"所有设置"：用户看到"设置没了"只会想
+ * "重新点一遍就好"，看到"API Key 也会清空"才知道这一下有多贵。
+ */
+@Composable
+private fun ResetConfirmDialog(
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = {
+            Text(
+                text = stringResource(R.string.msg_reset_confirm_title),
+                style = MaterialTheme.typography.titleSmall,
+            )
+        },
+        text = {
+            Text(
+                text = stringResource(R.string.msg_reset_confirm_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        confirmButton = {
+            NothingButton(
+                text = stringResource(R.string.action_reset),
+                onClick = onConfirm,
+                filled = true,
+            )
+        },
+        dismissButton = {
+            NothingButton(
+                text = stringResource(R.string.action_cancel),
+                onClick = onDismiss,
+            )
+        },
+    )
+}
+
 // ---------------------------------------------------------------------------
 // 06 语音播报
 // ---------------------------------------------------------------------------
@@ -1164,80 +1225,28 @@ private fun TtsSection(
             }
         }
 
-        // ---- 豆包（火山引擎）配置：只在选了豆包时才展开 ----
+        // ---- 豆包（火山引擎 · 语音技术）配置：只在选了豆包时才展开 ----
         if (tts.provider == TtsProvider.DOUBAO) {
             Hairline(color = MaterialTheme.colorScheme.outlineVariant)
-            Text(
-                text = stringResource(R.string.label_doubao_api_version),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                DoubaoApiVersion.values().forEach { version ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        NothingRadio(
-                            selected = tts.doubaoApiVersion == version,
-                            onClick = {
-                                onChange(
-                                    draft.copy(
-                                        tts = tts.copy(
-                                            doubaoApiVersion = version,
-                                            // 资源 ID 必须和"代次"匹配，换接口时顺手给出对应的默认值，
-                                            // 否则用户很容易留着 seed-tts-2.0 去调 v1 接口，然后拿到一个看不懂的报错
-                                            doubaoResourceId = if (version == DoubaoApiVersion.V3) {
-                                                Defaults.DOUBAO_RESOURCE_ID
-                                            } else {
-                                                tts.doubaoResourceId
-                                            },
-                                        ),
-                                    ),
-                                )
-                            },
-                        )
-                        ChoiceLabel(
-                            title = stringResource(
-                                when (version) {
-                                    DoubaoApiVersion.V3 -> R.string.doubao_v3
-                                    DoubaoApiVersion.V1 -> R.string.doubao_v1
-                                },
-                            ),
-                            desc = null,
-                        )
-                    }
-                }
-            }
 
-            NothingField(
-                value = tts.doubaoAppId,
-                onValueChange = { onChange(draft.copy(tts = tts.copy(doubaoAppId = it))) },
-                label = stringResource(R.string.label_doubao_app_id),
-            )
+            // 只有三格。曾经这里是「接口版本 + App ID + Access Token + 音色 + Resource ID/Cluster」
+            // 七格，其中"该选 v3 还是 v1""Resource ID 该填哪一档"都是用户没法自己判断的问题。
+            // 换成这套单 Key 接口之后，答案唯一了，那些选择题也就不存在了。
             SecretField(
-                value = tts.doubaoAccessToken,
-                onValueChange = { onChange(draft.copy(tts = tts.copy(doubaoAccessToken = it))) },
-                label = stringResource(R.string.label_doubao_token),
+                value = tts.doubaoApiKey,
+                onValueChange = { onChange(draft.copy(tts = tts.copy(doubaoApiKey = it))) },
+                label = stringResource(R.string.label_doubao_api_key),
             )
             NothingField(
                 value = tts.doubaoSpeaker,
                 onValueChange = { onChange(draft.copy(tts = tts.copy(doubaoSpeaker = it))) },
                 label = stringResource(R.string.label_doubao_speaker),
             )
-            if (tts.doubaoApiVersion == DoubaoApiVersion.V3) {
-                NothingField(
-                    value = tts.doubaoResourceId,
-                    onValueChange = { onChange(draft.copy(tts = tts.copy(doubaoResourceId = it))) },
-                    label = stringResource(R.string.label_doubao_resource_id),
-                )
-            } else {
-                NothingField(
-                    value = tts.doubaoCluster,
-                    onValueChange = { onChange(draft.copy(tts = tts.copy(doubaoCluster = it))) },
-                    label = stringResource(R.string.label_doubao_cluster),
-                )
-            }
+            NothingField(
+                value = tts.doubaoResourceId,
+                onValueChange = { onChange(draft.copy(tts = tts.copy(doubaoResourceId = it))) },
+                label = stringResource(R.string.label_doubao_resource_id),
+            )
 
             Text(
                 text = stringResource(R.string.doubao_hint),
@@ -1429,10 +1438,15 @@ private fun PermissionRow(
  * 保存是这一页唯一的主操作，所以做成实底（白底上是纯黑块、黑底上是纯白块）；
  * "恢复默认"是破坏性操作，做成描边放在左边、宽度更窄 —— 不抢主操作的注意力，
  * 但位置固定、不会被滑走，改完配置不用再滚回去找。
+ *
+ * [saveEnabled] 传的是"配置读完了没有"：读盘没回来之前草稿还是全默认值，
+ * 这时候点保存会把**整份默认配置**盖到已有的配置上（API Key 一起没）。
+ * 所以没读完就直接禁用按钮，别给用户一个能把数据写坏的入口。
  */
 @Composable
 private fun ActionBar(
     saving: Boolean,
+    saveEnabled: Boolean,
     onSave: () -> Unit,
     onReset: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1465,7 +1479,7 @@ private fun ActionBar(
                     text = stringResource(R.string.action_save),
                     onClick = onSave,
                     filled = true,
-                    enabled = !saving,
+                    enabled = !saving && saveEnabled,
                     modifier = Modifier.weight(1.6f),
                 )
             }

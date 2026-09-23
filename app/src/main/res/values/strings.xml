@@ -80,15 +80,10 @@
     <string name="tts_doubao">豆包语音（火山引擎）</string>
     <string name="tts_doubao_desc">云端合成，音色自然得多，读长文最像真人；需要联网</string>
 
-    <string name="label_doubao_api_version">接口版本</string>
-    <string name="doubao_v3">v3 大模型接口（推荐，音色最全）</string>
-    <string name="doubao_v1">v1 小模型接口（只有标准音色）</string>
-    <string name="label_doubao_app_id">App ID</string>
-    <string name="label_doubao_token">Access Token</string>
+    <string name="label_doubao_api_key">API Key（语音控制台）</string>
     <string name="label_doubao_speaker">音色 ID</string>
     <string name="label_doubao_resource_id">Resource ID</string>
-    <string name="label_doubao_cluster">Cluster</string>
-    <string name="doubao_hint">控制台路径：火山引擎 → 豆包语音 → 语音合成 → 创建应用。Resource ID 必须和音色代次匹配（2.0 音色只能用 seed-tts-2.0），配错会返回「音色与资源不匹配」。改完点最下面的「保存」，再用「试听一句」验证。</string>
+    <string name="doubao_hint">API Key 要用火山引擎「语音技术」控制台的：左侧菜单 → API Key 管理 → 创建 API Key，拿到一串 UUID 形式的值。⚠️ 火山方舟（Ark）那边的 Key 不能用在语音接口上，填了会报 Invalid X-Api-Key。音色 ID 与 Resource ID 必须同代次（2.0 音色配 seed-tts-2.0），配错会报「音色与资源不匹配」。改完点最下面的「保存」，再用「试听一句」验证。</string>
     <string name="llm_local_fallback_hint">不填也能用：组件会只用本地信息（日程 / 行程 / 包裹）生成简报，新闻快讯需要模型提炼、会缺席。</string>
 
     <string name="label_accent_hue">点阵主色</string>
@@ -142,6 +137,8 @@
 
     <string name="msg_saved">已保存</string>
     <string name="msg_reset_done">已恢复出厂配置</string>
+    <string name="msg_reset_confirm_title">恢复默认？</string>
+    <string name="msg_reset_confirm_desc">配色、语音引擎、数据源、订阅源都会回到默认值，「已经填好的 API Key 也会一起清空」（要重新回控制台复制）。这一步无法撤销。</string>
     <string name="msg_api_key_missing">已保存。没填 API Key 时也能用，只是只用本地信息（日程 / 行程 / 包裹）生成简报</string>
     <string name="msg_feed_added">订阅源已添加</string>
     <string name="msg_feed_duplicated">这个地址已经添加过了</string>
@@ -151,7 +148,7 @@
     <string name="msg_length_range_invalid">字数范围不合法：下限不能大于上限</string>
     <string name="msg_preview_speaking">正在用当前语速试听…</string>
     <string name="msg_preview_synthesizing">正在向豆包合成语音…</string>
-    <string name="msg_doubao_incomplete">豆包的 App ID / Access Token / 音色 ID 还没填全</string>
+    <string name="msg_doubao_incomplete">豆包的 API Key / 音色 ID 还没填全</string>
     <string name="notif_synthesizing">正在合成语音…</string>
     <string name="preview_sample_text">你好，我是你的私人管家。这是当前语速和音调的试听效果。</string>
 

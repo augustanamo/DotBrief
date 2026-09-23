@@ -46,13 +46,24 @@ internal object SettingsKeys {
     val LEGACY_EDGE_TTS_ENDPOINT = stringPreferencesKey("tts.edge.endpoint")
     val LEGACY_EDGE_TTS_VOICE = stringPreferencesKey("tts.edge.voice")
 
-    // ---------- 豆包（火山引擎）语音合成 ----------
-    val DOUBAO_API_VERSION = stringPreferencesKey("tts.doubao.api_version")
-    val DOUBAO_APP_ID = stringPreferencesKey("tts.doubao.app_id")
-    val DOUBAO_ACCESS_TOKEN = stringPreferencesKey("tts.doubao.access_token")
+    // ---------- 豆包（火山引擎 · 语音技术）语音合成 ----------
+    val DOUBAO_API_KEY = stringPreferencesKey("tts.doubao.api_key")
     val DOUBAO_RESOURCE_ID = stringPreferencesKey("tts.doubao.resource_id")
-    val DOUBAO_CLUSTER = stringPreferencesKey("tts.doubao.cluster")
     val DOUBAO_SPEAKER = stringPreferencesKey("tts.doubao.speaker")
+
+    /**
+     * 已废弃的双头鉴权字段（`tts.doubao.api_version` / `app_id` / `access_token` / `cluster`）。
+     *
+     * 接口换成单 `X-Api-Key` 之后这四项没人读了，但会留在老用户的 DataStore 里。
+     * 和 Edge-TTS 那两个 key 一样的处理：保存配置时顺手删掉，不做一次性迁移 ——
+     * 它们是几个没人读的字符串，不值得为它多一套迁移机制。
+     *
+     * ⚠️ `access_token` 是**凭据**，留着不只是冗余，还平白多一份泄漏面，更该删。
+     */
+    val LEGACY_DOUBAO_API_VERSION = stringPreferencesKey("tts.doubao.api_version")
+    val LEGACY_DOUBAO_APP_ID = stringPreferencesKey("tts.doubao.app_id")
+    val LEGACY_DOUBAO_ACCESS_TOKEN = stringPreferencesKey("tts.doubao.access_token")
+    val LEGACY_DOUBAO_CLUSTER = stringPreferencesKey("tts.doubao.cluster")
 
     // ---------- 小组件外观 ----------
     val WIDGET_ACCENT_HUE = floatPreferencesKey("widget.accent_hue")

@@ -76,24 +76,26 @@ object Defaults {
 
     // ---------- 豆包（火山引擎）语音合成 ----------
     /**
-     * v3 是「豆包语音合成大模型」接口，能用的音色最全（含 2.0 系列），推荐。
-     * v1 是老的小模型接口，只有标准音色，但存量账号基本都能用。
-     * 两个接口的鉴权头、请求体、响应体都不一样，客户端按 [DoubaoApiVersion] 分流。
+     * 语音合成 v3 的 unidirectional 接口。
+     *
+     * 这套接口只有一条路：单 `X-Api-Key` 鉴权，响应是 NDJSON 流
+     * （每行一个 `{"code":0,"data":"…"}`，末行 `code` 为 20000000 表示结束）。
+     * 老的三件套鉴权（App ID + Access Token + Cluster）已经去掉了 ——
+     * 留着就得同时维护两套鉴权、两套响应解析，而 Key 和音色还互不通用。
      */
-    const val DOUBAO_V3_ENDPOINT: String = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
-    const val DOUBAO_V1_ENDPOINT: String = "https://openspeech.bytedance.com/api/v1/tts"
+    const val DOUBAO_ENDPOINT: String = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
+
+    /** 请求体里的命名空间，这套协议固定 BidirectionalTTS。 */
+    const val DOUBAO_NAMESPACE: String = "BidirectionalTTS"
 
     /** 资源 ID：决定"你这把 Key 能调哪一代模型"，必须和所选音色的代次匹配。 */
     const val DOUBAO_RESOURCE_ID: String = "seed-tts-2.0"
 
-    /** v1 接口的业务集群，标准音色固定 volcano_tts。 */
-    const val DOUBAO_CLUSTER: String = "volcano_tts"
+    /** 通用中文女声 2.0，音色自然、不挑场景，适合当默认值。 */
+    const val DOUBAO_SPEAKER: String = "zh_female_vv_uranus_bigtts"
 
-    /** 小何 2.0（通用中文女声），音色自然、不挑场景，适合当默认值。 */
-    const val DOUBAO_SPEAKER: String = "zh_female_xiaohe_uranus_bigtts"
-
-    /** 火山引擎要求请求体里带一个 uid，仅用于服务端日志追溯，随便填。 */
-    const val DOUBAO_UID: String = "briefwidget"
+    /** 服务端要求请求体里带一个 uid，仅用于日志追溯，随便填。 */
+    const val DOUBAO_UID: String = "dotbrief"
 
     // ---------- 简报 ----------
     const val BRIEF_MIN_CHARS: Int = 150

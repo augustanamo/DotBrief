@@ -104,6 +104,11 @@ class SettingsViewModel(
     }
 
     fun save() {
+        // 读盘还没回来时草稿还是全默认值，这时候保存 = 把整份默认配置盖到用户配置上
+        // （API Key 一起没）。UI 层的按钮也是禁用的（ActionBar 的 saveEnabled），
+        // 这里再兜一道：按钮状态和状态流之间总有窗口，而这一次写坏的东西不可恢复。
+        if (!_uiState.value.loaded) return
+
         val draft = _uiState.value.draft
 
         if (draft.brief.minChars > draft.brief.maxChars) {

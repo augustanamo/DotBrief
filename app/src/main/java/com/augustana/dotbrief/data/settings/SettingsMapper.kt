@@ -41,9 +41,6 @@ internal object SettingsCodec {
     fun decodeTtsProvider(raw: String): TtsProvider =
         TtsProvider.values().firstOrNull { it.name == raw } ?: TtsProvider.SYSTEM
 
-    fun decodeDoubaoApiVersion(raw: String): DoubaoApiVersion =
-        DoubaoApiVersion.values().firstOrNull { it.name == raw } ?: DoubaoApiVersion.V3
-
     /** 枚举存名字而不是序号：以后往中间插一档，老数据也不会被错位解析。 */
     fun decodeCarouselPace(raw: String): CarouselPace =
         CarouselPace.values().firstOrNull { it.name == raw } ?: Defaults.WIDGET_ACCENT_CAROUSEL_PACE
@@ -79,13 +76,8 @@ internal fun Preferences.toUserSettings(): UserSettings {
             pitch = prefs[SettingsKeys.TTS_PITCH] ?: defaults.tts.pitch,
             localeTag = prefs[SettingsKeys.TTS_LOCALE_TAG] ?: defaults.tts.localeTag,
             voiceName = prefs[SettingsKeys.TTS_VOICE_NAME] ?: defaults.tts.voiceName,
-            doubaoApiVersion = prefs[SettingsKeys.DOUBAO_API_VERSION]
-                ?.let { SettingsCodec.decodeDoubaoApiVersion(it) }
-                ?: defaults.tts.doubaoApiVersion,
-            doubaoAppId = prefs[SettingsKeys.DOUBAO_APP_ID] ?: defaults.tts.doubaoAppId,
-            doubaoAccessToken = prefs[SettingsKeys.DOUBAO_ACCESS_TOKEN] ?: defaults.tts.doubaoAccessToken,
+            doubaoApiKey = prefs[SettingsKeys.DOUBAO_API_KEY] ?: defaults.tts.doubaoApiKey,
             doubaoResourceId = prefs[SettingsKeys.DOUBAO_RESOURCE_ID] ?: defaults.tts.doubaoResourceId,
-            doubaoCluster = prefs[SettingsKeys.DOUBAO_CLUSTER] ?: defaults.tts.doubaoCluster,
             doubaoSpeaker = prefs[SettingsKeys.DOUBAO_SPEAKER] ?: defaults.tts.doubaoSpeaker,
         ),
         brief = BriefConfig(
@@ -142,12 +134,14 @@ internal fun MutablePreferences.applyUserSettings(settings: UserSettings) {
     this.remove(SettingsKeys.LEGACY_EDGE_TTS_ENDPOINT)
     this.remove(SettingsKeys.LEGACY_EDGE_TTS_VOICE)
 
-    this[SettingsKeys.DOUBAO_API_VERSION] = settings.tts.doubaoApiVersion.name
-    this[SettingsKeys.DOUBAO_APP_ID] = settings.tts.doubaoAppId.trim()
-    this[SettingsKeys.DOUBAO_ACCESS_TOKEN] = settings.tts.doubaoAccessToken.trim()
+    this[SettingsKeys.DOUBAO_API_KEY] = settings.tts.doubaoApiKey.trim()
     this[SettingsKeys.DOUBAO_RESOURCE_ID] = settings.tts.doubaoResourceId.trim()
-    this[SettingsKeys.DOUBAO_CLUSTER] = settings.tts.doubaoCluster.trim()
     this[SettingsKeys.DOUBAO_SPEAKER] = settings.tts.doubaoSpeaker.trim()
+    // 旧双头鉴权的四个键一并清掉（其中 access_token 是凭据，更不该留着）
+    this.remove(SettingsKeys.LEGACY_DOUBAO_API_VERSION)
+    this.remove(SettingsKeys.LEGACY_DOUBAO_APP_ID)
+    this.remove(SettingsKeys.LEGACY_DOUBAO_ACCESS_TOKEN)
+    this.remove(SettingsKeys.LEGACY_DOUBAO_CLUSTER)
 
     this[SettingsKeys.BRIEF_MIN_CHARS] = settings.brief.minChars
     this[SettingsKeys.BRIEF_MAX_CHARS] = settings.brief.maxChars

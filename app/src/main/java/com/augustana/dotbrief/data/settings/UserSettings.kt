@@ -30,15 +30,6 @@ enum class TtsProvider {
     DOUBAO,
 }
 
-/** 豆包语音合成走哪一代接口。 */
-enum class DoubaoApiVersion {
-    /** 大模型接口，音色最全（含 2.0），推荐。 */
-    V3,
-
-    /** 老的小模型接口，只有标准音色，但存量账号兼容性最好。 */
-    V1,
-}
-
 /**
  * 霓虹轮播的节奏。
  *
@@ -156,21 +147,28 @@ data class TtsConfig(
     /** 为空表示跟随系统语言，不做语音包指定。 */
     val voiceName: String = "",
 
-    // ---------- 豆包（火山引擎） ----------
-    val doubaoApiVersion: DoubaoApiVersion = DoubaoApiVersion.V3,
-    val doubaoAppId: String = "",
-    /** 火山引擎控制台里的 Access Token。 */
-    val doubaoAccessToken: String = "",
-    /** v3 用：seed-tts-2.0 / seed-tts-1.0 / seed-icl-2.0 …，必须是账号已开通的那一档。 */
+    // ---------- 豆包（火山引擎 · 语音技术） ----------
+    /**
+     * 火山引擎**语音技术**控制台的 API Key，一串 UUID 形式的值。
+     *
+     * 只填这一个就够了 —— 它同时顶替了老接口那套
+     * 「App ID + Access Token + Cluster」三件套。
+     *
+     * ⚠️ 别把方舟（Ark）那边的 Key 填进来。两边的控制台各签各的，
+     * 方舟那套 `api-key-…` 在语音接口上会被判 `Invalid X-Api-Key`（实测踩过）。
+     * 这里**不写任何真实值**：这个字段是用户自己的凭据，不该出现在源码或提交历史里。
+     */
+    val doubaoApiKey: String = "",
+
+    /** 资源 ID：seed-tts-2.0 / seed-tts-1.0 …，决定这把 Key 能调哪一代模型，必须和音色代次匹配。 */
     val doubaoResourceId: String = Defaults.DOUBAO_RESOURCE_ID,
-    /** v1 用：标准音色的业务集群。 */
-    val doubaoCluster: String = Defaults.DOUBAO_CLUSTER,
-    /** 音色 ID：v3 叫 speaker，v1 叫 voice_type，填法一样。 */
+
+    /** 音色 ID（`*_bigtts` 系列，如 `zh_female_vv_uranus_bigtts`）。 */
     val doubaoSpeaker: String = Defaults.DOUBAO_SPEAKER,
 ) {
     /** 云端引擎才算「已配置」；系统引擎永远可用，不需要额外校验。 */
     val isDoubaoReady: Boolean
-        get() = doubaoAppId.isNotBlank() && doubaoAccessToken.isNotBlank() && doubaoSpeaker.isNotBlank()
+        get() = doubaoApiKey.isNotBlank() && doubaoSpeaker.isNotBlank()
 }
 
 /** 简报正文的生成规则。 */
