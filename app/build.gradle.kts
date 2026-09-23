@@ -6,11 +6,11 @@ plugins {
 }
 
 android {
-    namespace = "com.briefwidget"
+    namespace = "com.augustana.dotbrief"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.briefwidget"
+        applicationId = "com.augustana.dotbrief"
         minSdk = 26          // Android 8.0：NotificationListenerService / 自适应图标 / java.time 均可直接用
         targetSdk = 34
         versionCode = 1

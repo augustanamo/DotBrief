@@ -1,33 +1,57 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 点阵风格图标：3x3 圆点，中列整列点亮，形似声波 -->
+<!--
+  点阵字母 D：DotBrief 的首字母，用桌面那套点阵语言拼出来。
+
+  ## 网格
+
+  5 列 × 7 行（点阵字的经典尺寸），点的直径 6dp、间距 8dp —— 中间留 2dp 空隙。
+  这个空隙是要紧的：点与点贴在一起就成了实心图形，"点阵"就没了。
+
+  ## 为什么这么大
+
+  自适应图标会被桌面裁成各种形状，**安全区是中心一个直径 66dp 的圆**，
+  超出部分在不同桌面上表现不一致（有的削掉一角，有的看不出来）。
+  这里把整个字放在 60×54dp 的方框里（中心对齐 54,54），
+  最远的角点距中心 33.5dp —— 留了余量，不会出现"字母被削掉一角"。
+
+  如果想让字再大一点，别只调坐标：右上角那一格留空是 D 的一部分
+  （见下面 path 行 1），把它填满就变成 O 了。
+
+  ## 为什么 monochrome 也用它
+
+  `<monochrome>` 指向同一份前景：Android 13 的主题图标会把整套图标去色，
+  这时候彩色本身没有意义，形状才传达品牌 —— 而"点阵 D"正好是纯形状的。
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <group
-        android:translateX="27"
-        android:translateY="27">
-        <!-- 第 1 列 -->
-        <path android:fillAlpha="0.35" android:fillColor="#FFFFFFFF"
-            android:pathData="M9,9 m-4.5,0 a4.5,4.5 0 1,0 9,0 a4.5,4.5 0 1,0 -9,0" />
-        <path android:fillAlpha="0.75" android:fillColor="#FFFFFFFF"
-            android:pathData="M9,27 m-4.5,0 a4.5,4.5 0 1,0 9,0 a4.5,4.5 0 1,0 -9,0" />
-        <path android:fillAlpha="0.35" android:fillColor="#FFFFFFFF"
-            android:pathData="M9,45 m-4.5,0 a4.5,4.5 0 1,0 9,0 a4.5,4.5 0 1,0 -9,0" />
-        <!-- 第 2 列（主列） -->
-        <path android:fillColor="#FFFFFFFF"
-            android:pathData="M27,9 m-5.5,0 a5.5,5.5 0 1,0 11,0 a5.5,5.5 0 1,0 -11,0" />
-        <path android:fillColor="#FFFFFFFF"
-            android:pathData="M27,27 m-5.5,0 a5.5,5.5 0 1,0 11,0 a5.5,5.5 0 1,0 -11,0" />
-        <path android:fillColor="#FFFFFFFF"
-            android:pathData="M27,45 m-5.5,0 a5.5,5.5 0 1,0 11,0 a5.5,5.5 0 1,0 -11,0" />
-        <!-- 第 3 列 -->
-        <path android:fillAlpha="0.35" android:fillColor="#FFFFFFFF"
-            android:pathData="M45,9 m-4.5,0 a4.5,4.5 0 1,0 9,0 a4.5,4.5 0 1,0 -9,0" />
-        <path android:fillAlpha="0.75" android:fillColor="#FFFFFFFF"
-            android:pathData="M45,27 m-4.5,0 a4.5,4.5 0 1,0 9,0 a4.5,4.5 0 1,0 -9,0" />
-        <path android:fillAlpha="0.35" android:fillColor="#FFFFFFFF"
-            android:pathData="M45,45 m-4.5,0 a4.5,4.5 0 1,0 9,0 a4.5,4.5 0 1,0 -9,0" />
-    </group>
+
+    <!-- 第 1 行：1 1 1 1 0（右上角留空，D 的"肩"） -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M38,30 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 M46,30 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 M54,30 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 M62,30 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0" />
+
+    <!-- 第 2 ~ 6 行：1 0 0 0 1（左竖 + 右弧） -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M38,38 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 M70,38 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M38,46 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 M70,46 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M38,54 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 M70,54 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M38,62 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 M70,62 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M38,70 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 M70,70 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0" />
+
+    <!-- 第 7 行：1 1 1 1 0（右下角同样留空） -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M38,78 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 M46,78 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 M54,78 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 M62,78 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0" />
 </vector>

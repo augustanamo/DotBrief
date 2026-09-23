@@ -1,8 +1,8 @@
 # 保持 kotlinx.serialization 生成的序列化器
 -keepattributes *Annotation*, InnerClasses
 -dontnote kotlinx.serialization.**
--keepclassmembers class com.briefwidget.**$$serializer { *; }
--keepclasseswithmembers class com.briefwidget.** {
+-keepclassmembers class com.augustana.dotbrief.**$$serializer { *; }
+-keepclasseswithmembers class com.augustana.dotbrief.** {
     kotlinx.serialization.KSerializer serializer(...);
 }
 

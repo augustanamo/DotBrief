@@ -18,7 +18,7 @@ cd BriefWidget
 
 # 装到手机（需要先 adb devices 能看到设备）
 adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n com.briefwidget/.ui.settings.SettingsActivity
+adb shell am start -n com.augustana.dotbrief/.ui.settings.SettingsActivity
 ```
 
 **验证编译时请关掉构建缓存**，否则 Gradle 会用 `FROM-CACHE` 假装成功：
@@ -143,7 +143,7 @@ BriefWidget/
 
 ## 六、安全提示
 
-API Key 目前以明文存于 DataStore（`/data/data/com.briefwidget/files/datastore/brief_settings.preferences_pb`），
+API Key 目前以明文存于 DataStore（`/data/data/com.augustana.dotbrief/files/datastore/brief_settings.preferences_pb`），
 非 root 设备上读不到，但**备份 / root / 调试工具可提取**。若要加固：
 
 - 接入 Keystore 派生密钥，用 `AES/GCM` 只加密 `llm.api_key` 一个字段（改 `SettingsMapper` 的两处即可，
