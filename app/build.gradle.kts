@@ -20,6 +20,17 @@ android {
         vectorDrawables { useSupportLibrary = true }
     }
 
+    signingConfigs {
+        // 签名来自仓库根目录的 debug.keystore（AGP 默认的 ~/.android/debug.keystore 是每台机器
+        // 各自随机生成的，换一台机器构建，包就装不进装过旧包的手机——报
+        // INSTALL_FAILED_UPDATE_INCOMPATIBLE）。收进仓库后指纹恒定，任何机器构建的包都能互相覆盖安装。
+        // 密码/别名沿用 AGP 默认值（android / androiddebugkey，PKCS12 下两者相同），不必显式写。
+        // 注意：这只是 debug 密钥，自用分发够用；上架商店请另签正式密钥。
+        getByName("debug") {
+            storeFile = rootProject.file("debug.keystore")
+        }
+    }
+
     buildTypes {
         debug {
             isMinifyEnabled = false
@@ -30,6 +41,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            // release 也指同一份 keystore：否则 assembleRelease 出来是未签名包装不了；
+            // 且 debug/release 签名一致，两种包之间也能互相覆盖安装。
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 
