@@ -23,6 +23,7 @@ import com.augustana.dotbrief.data.llm.PromptBuilder
 import com.augustana.dotbrief.data.local.dao.CapturedNotificationDao
 import com.augustana.dotbrief.data.notification.IngestKind
 import com.augustana.dotbrief.data.settings.BriefSource
+import com.augustana.dotbrief.data.settings.Defaults
 import com.augustana.dotbrief.data.settings.RuntimeStateStore
 import com.augustana.dotbrief.data.settings.SettingsRepository
 import com.augustana.dotbrief.data.settings.UserSettings
@@ -90,13 +91,15 @@ class GenerateBriefUseCase(
         }
 
         val system = PromptBuilder.systemPrompt(settings)
-        val user = PromptBuilder.userPrompt(input, settings, isAlarm = source == SOURCE_ALARM)
+        val user = PromptBuilder.userPrompt(input, isAlarm = source == SOURCE_ALARM)
 
         // 失败自动切换：按列表顺序逐个试，成功即止。见 [LlmProfiles] 的说明。
         val result = completeWithFailover(settings, system, user, source)
         return when (result) {
             is LlmResult.Success -> {
-                val clean = sanitize(result.text, settings.brief.length.maxChars)
+                // 上限只是防失控的天花板 —— 篇幅本身跟着素材走，
+                // 见 Defaults.BRIEF_SANITY_MAX_CHARS。
+                val clean = sanitize(result.text, Defaults.BRIEF_SANITY_MAX_CHARS)
                 if (clean.isBlank()) {
                     // 模型这次没吐出可念的东西 —— 和调用失败同等对待，退到本地简报。
                     fallback(input, "模型返回的内容是空的")
@@ -256,7 +259,7 @@ class GenerateBriefUseCase(
             if (BriefSource.NEWS !in sources || !settings.llm.anyReady) {
                 emptyList<NewsItem>() to null
             } else {
-                rssSource.fetch(settings.rss.feeds, settings.rss.maxItemsPerFeed)
+                rssSource.fetch(settings.rss.feeds)
             }
         }
 

@@ -73,9 +73,6 @@ internal object SettingsCodec {
     fun decodeCarouselPace(raw: String): CarouselPace =
         CarouselPace.values().firstOrNull { it.name == raw } ?: Defaults.WIDGET_ACCENT_CAROUSEL_PACE
 
-    /** 同上，存名字。取不到（老配置、手改过的值）就回落到默认档。 */
-    fun decodeBriefLength(raw: String): BriefLength =
-        BriefLength.values().firstOrNull { it.name == raw } ?: Defaults.BRIEF_LENGTH
 }
 
 /** DataStore Preferences -> 领域模型。任何缺失的 key 都回落到 [Defaults]。 */
@@ -94,8 +91,8 @@ internal fun Preferences.toUserSettings(): UserSettings {
             feeds = prefs[SettingsKeys.RSS_FEEDS_JSON]
                 ?.let { SettingsCodec.decodeFeeds(it) }
                 ?: defaults.rss.feeds,
-            maxItemsPerFeed = prefs[SettingsKeys.RSS_MAX_ITEMS_PER_FEED] ?: defaults.rss.maxItemsPerFeed,
-            newsCount = prefs[SettingsKeys.RSS_NEWS_COUNT] ?: defaults.rss.newsCount,
+            // "每个源取几条"与"最终讲几条"已经是实现细节，不再从 prefs 读 ——
+            // 老用户的 DataStore 里可能还留着这两个键，没人读它们。
         ),
         tts = TtsConfig(
             provider = prefs[SettingsKeys.TTS_PROVIDER]
@@ -110,11 +107,8 @@ internal fun Preferences.toUserSettings(): UserSettings {
             doubaoSpeaker = prefs[SettingsKeys.DOUBAO_SPEAKER] ?: defaults.tts.doubaoSpeaker,
         ),
         brief = BriefConfig(
-            // 篇幅：两个字数滑杆换成一档枚举之后，min/max 字段已从 BriefConfig 移除，
-            // 这里也就不再读 brief.min_chars / brief.max_chars（它们会在下次保存时被清掉）。
-            length = prefs[SettingsKeys.BRIEF_LENGTH]
-                ?.let { SettingsCodec.decodeBriefLength(it) }
-                ?: defaults.brief.length,
+            // 篇幅已经不是一个配置项（由素材决定），brief.length 字段随之移除，
+            // brief.length 这个键也不再读。
             sources = prefs[SettingsKeys.BRIEF_SOURCES]
                 ?.let { SettingsCodec.decodeSources(it) }
                 ?: defaults.brief.sources,
@@ -171,8 +165,9 @@ internal fun MutablePreferences.applyUserSettings(settings: UserSettings) {
     this.remove(SettingsKeys.LLM_SYSTEM_PROMPT)
 
     this[SettingsKeys.RSS_FEEDS_JSON] = SettingsCodec.encodeFeeds(settings.rss.feeds)
-    this[SettingsKeys.RSS_MAX_ITEMS_PER_FEED] = settings.rss.maxItemsPerFeed
-    this[SettingsKeys.RSS_NEWS_COUNT] = settings.rss.newsCount
+    // 这两个数字键已经没人读（见 RssConfig 的说明），顺手清掉
+    this.remove(SettingsKeys.LEGACY_RSS_MAX_ITEMS_PER_FEED)
+    this.remove(SettingsKeys.LEGACY_RSS_NEWS_COUNT)
 
     this[SettingsKeys.TTS_PROVIDER] = settings.tts.provider.name
     // tts.speech_rate / tts.pitch 不再写入：字段已从 TtsConfig 移除（一律原速）。
@@ -192,8 +187,8 @@ internal fun MutablePreferences.applyUserSettings(settings: UserSettings) {
     this.remove(SettingsKeys.LEGACY_DOUBAO_ACCESS_TOKEN)
     this.remove(SettingsKeys.LEGACY_DOUBAO_CLUSTER)
 
-    this[SettingsKeys.BRIEF_LENGTH] = settings.brief.length.name
-    // 顺手清理已废弃的字数上下限键：见 SettingsKeys 里那两个 LEGACY_ 常量的说明
+    // 顺手清理已废弃的键：篇幅档位、字数上下限都不再是配置项
+    this.remove(SettingsKeys.LEGACY_BRIEF_LENGTH)
     this.remove(SettingsKeys.LEGACY_BRIEF_MIN_CHARS)
     this.remove(SettingsKeys.LEGACY_BRIEF_MAX_CHARS)
     this[SettingsKeys.BRIEF_SOURCES] = SettingsCodec.encodeSources(settings.brief.sources)

@@ -76,7 +76,6 @@ import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.delay
 import com.augustana.dotbrief.R
 import com.augustana.dotbrief.data.settings.AccentColor
-import com.augustana.dotbrief.data.settings.BriefLength
 import com.augustana.dotbrief.data.settings.BriefSource
 import com.augustana.dotbrief.data.settings.CarouselPace
 import com.augustana.dotbrief.data.settings.LlmConfig
@@ -152,8 +151,8 @@ import kotlin.math.abs
  * ## 为什么不是全平铺，也不是全菜单
  *
  * 全平铺（原来那样）的问题不是"长"，是**三类东西混在一页里**：
- * 动作（立即播报 / 刷新 / 停止）、高频调节（篇幅、来源、自动刷新开关）、
- * 一次配置（API Key、音色、18 个 RSS 勾选）。第三类配完再也不动，
+ * 动作（立即播报 / 刷新 / 停止）、高频调节（前瞻时长、数据来源、自动刷新开关）、
+ * 一次配置（API Key、音色、几十条 RSS 源的勾选）。第三类配完再也不动，
  * 却把天天要碰的前两类挤到了好几屏之外。
  *
  * 全菜单（进来只有 7 个入口块）能治"长"，但它把信息**藏**起来了，
@@ -550,7 +549,7 @@ private fun RootPage(
             )
         }
 
-        // 02 简报内容：篇幅 / 前瞻 / 来源都是会来回改的，留在一级
+        // 02 简报内容：前瞻时长 / 数据来源都会来回改，留在一级
         item { BriefSection(index = "02", draft = draft, onChange = onChange) }
 
         item {
@@ -1994,33 +1993,11 @@ private fun BriefSection(
         eyebrow = stringResource(R.string.eyebrow_brief),
         desc = stringResource(R.string.section_brief_desc),
     ) {
-        // 篇幅：三档，按"念多久"选。
+        // 篇幅不再是一个设置项：念多长由**素材量**决定，不由预设档位决定。
         //
-        // 这里原来是并排两个滑杆（正文字数下限 / 上限），被问了一句"为啥要限制什么正文"。
-        // 那两个数字确实答不上来：250 字是多长？下限又是干什么用的？而这段字要**念出来**，
-        // 有意义的单位是时间。顺带一个收益：上下限成对写在枚举里之后，
-        // "下限大于上限"这种非法状态在类型层面就不存在了（原来得在保存时校验一次）。
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(
-                text = stringResource(R.string.label_length),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            NothingSegmented(
-                options = BriefLength.values().map { stringResource(it.labelRes()) },
-                selectedIndex = BriefLength.values().indexOf(brief.length),
-                onSelect = { index ->
-                    val picked = BriefLength.values()[index]
-                    onChange(draft.copy(brief = brief.copy(length = picked)))
-                },
-            )
-        }
-        Text(
-            text = stringResource(R.string.brief_length_hint),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
+        // 这里曾经是三档「播报篇幅」（约 30 秒 / 1 分钟 / 2 分钟），两头都不讨好 ——
+        // 素材多的日子被硬砍，素材少的日子被逼着注水。规则现在写在系统提示词里
+        // （见 Defaults.SYSTEM_PROMPT 第 8 条），不必让用户去猜"我该选哪一档"。
         NothingSliderRow(
             label = stringResource(R.string.label_lookahead),
             valueText = "${ingest.lookaheadHours} H",
@@ -2071,12 +2048,6 @@ private fun BriefSection(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
-}
-
-private fun BriefLength.labelRes(): Int = when (this) {
-    BriefLength.SHORT -> R.string.brief_length_short
-    BriefLength.STANDARD -> R.string.brief_length_standard
-    BriefLength.LONG -> R.string.brief_length_long
 }
 
 private fun BriefSource.labelRes(): Int = when (this) {

@@ -191,11 +191,16 @@ data class LlmProfiles(
 }
 
 
-/** 新闻流配置。 */
+/**
+ * 新闻流配置。
+ *
+ * 这里曾经还有两个数字：「每个源取几条候选」与「最终讲几条」。都去掉了 ——
+ * 候选池的宽度由**用户勾了哪些源**决定（[feeds]），讲几条由模型按素材决定。
+ * 从前那套的毛病是"勾了十个源也只讲三条"：多勾的源等于白勾，
+ * 而模型明明拿到了十条都值得说的素材，还得砍掉七条。
+ */
 data class RssConfig(
     val feeds: List<RssFeed> = Defaults.RSS_FEEDS,
-    val maxItemsPerFeed: Int = Defaults.RSS_MAX_ITEMS_PER_FEED,
-    val newsCount: Int = Defaults.RSS_NEWS_COUNT,
 )
 
 /** 语音播报配置。 */
@@ -240,38 +245,15 @@ data class TtsConfig(
         get() = doubaoApiKey.isNotBlank() && doubaoSpeaker.isNotBlank()
 }
 
-/**
- * 简报的篇幅档位。
- *
- * ## 为什么按"时长"而不是"字数"
- *
- * 这里原本并排两个滑杆：「正文字数下限」「正文字数上限」。用户看到的第一反应是
- * "为啥要限制什么正文" —— 那两个数字回答不了他真正关心的问题：250 字是多长？
- * 下限又是干什么用的？而这段字是**要念出来的**，有意义的单位是时间。
- * 所以现在按"念多久"给三档，字数只是它的实现细节（中文 TTS 大约每分钟 250 字）。
- *
- * ## 下限从"配额"降级成"上限为准"
- *
- * 下限本来是为了保证简报有分量，代价却是素材少的时候逼模型注水
- * （"今天很平静，暂时没有安排，祝你有美好的一天"这种话循环三遍）。
- * 现在提示词里**上限是硬约束**，下限只是"素材够的时候大约写到这儿" ——
- * 宁可三十秒说完，也不要为凑长度重复。
- */
-enum class BriefLength(val minChars: Int, val maxChars: Int) {
-    /** 约 30 秒。 */
-    SHORT(80, 130),
-
-    /** 约 1 分钟（默认，与改动前的 150–250 字一致）。 */
-    STANDARD(150, 250),
-
-    /** 约 2 分钟。 */
-    LONG(320, 450),
-}
-
 /** 简报正文的生成规则。 */
 data class BriefConfig(
-    /** 篇幅档位：决定这段话说多久。 */
-    val length: BriefLength = Defaults.BRIEF_LENGTH,
+    // 这里曾经有 `length: BriefLength`（约 30 秒 / 1 分钟 / 2 分钟三档），已移除：
+    // **念多长由素材决定**，不由一个预设档位决定。
+    //
+    // 那三档两头都不讨好 —— 素材多的日子（十条都值得说的快讯）被硬砍到两分钟，
+    // 素材少的日子（只有天气加一条日程）又被下限逼着注水。现在篇幅规则直接写在
+    // 系统提示词里（见 [Defaults.SYSTEM_PROMPT] 第 8 条），
+    // 代码层只留一个防失控的天花板（见 [Defaults.BRIEF_SANITY_MAX_CHARS]）。
     val sources: Set<BriefSource> = Defaults.BRIEF_SOURCES,
 
     /** 到点自动刷新内容（只生成、不出声）。 */

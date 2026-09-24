@@ -22,12 +22,26 @@ import com.augustana.dotbrief.data.settings.UserSettings
  */
 object PromptBuilder {
 
+    /**
+     * 系统提示词。
+     *
+     * 篇幅不再按设置页的档位注入 —— 规则本身就写在默认提示词里（跟着素材走）。
+     * 这两行替换保留下来只为**老用户存过的自定义提示词**：他们那份里可能还写着
+     * "全文不超过 {{MAX_CHARS}} 个字"，不替换的话模型会直接读到花括号。
+     */
     fun systemPrompt(settings: UserSettings): String =
         settings.llm.primary.systemPrompt
-            .replace(Defaults.PLACEHOLDER_MIN_CHARS, settings.brief.length.minChars.toString())
-            .replace(Defaults.PLACEHOLDER_MAX_CHARS, settings.brief.length.maxChars.toString())
+            .replace(Defaults.PLACEHOLDER_MIN_CHARS, Defaults.LEGACY_MIN_CHARS.toString())
+            .replace(Defaults.PLACEHOLDER_MAX_CHARS, Defaults.LEGACY_MAX_CHARS.toString())
 
-    fun userPrompt(input: BriefInput, settings: UserSettings, isAlarm: Boolean = false): String = buildString {
+    /**
+     * 用户消息：素材 + 这一轮的特殊指令。
+     *
+     * 不再收 [UserSettings]：从前它只被用来读"讲几条"（`rss.newsCount`），
+     * 而那个数字已经去掉了（见 `RssConfig`）—— 素材怎么用，全交给模型按素材量判断。
+     * 系统提示词那一侧仍然按配置走，见 [systemPrompt]。
+     */
+    fun userPrompt(input: BriefInput, isAlarm: Boolean = false): String = buildString {
         appendLine("${input.nowText}。请根据下面的素材写今天的口语简报。")
         // 开场形态已由素材给定：闹钟是"现在是上午7点"（报时），其余是"早上好"（问候语）。
         // 给模型一条明确指令，别让它自作主张改写开场——否则它会自己加"现在是几点几分"，
@@ -117,7 +131,9 @@ object PromptBuilder {
         }
 
         if (input.news.isNotEmpty()) {
-            appendLine("【今日快讯素材】（挑最重要的${settings.rss.newsCount}条来讲）")
+            // 不给条数：讲几条由素材量决定。从前这里写死"挑最重要的 3 条"，
+            // 勾了十个源也只讲三条 —— 多勾的源白勾，模型手里多余的素材只能扔掉。
+            appendLine("【今日快讯素材】（从中挑值得一听的讲；不重要的可以不提，条数不用凑）")
             input.news.forEach { item ->
                 val summary = if (item.summary.isBlank()) "" else "：${item.summary}"
                 appendLine("- [${item.source}] ${item.title}$summary")

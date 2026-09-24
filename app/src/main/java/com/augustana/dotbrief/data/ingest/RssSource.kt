@@ -1,5 +1,6 @@
 package com.augustana.dotbrief.data.ingest
 
+import com.augustana.dotbrief.data.settings.Defaults
 import com.augustana.dotbrief.data.settings.RssFeed
 import com.prof18.rssparser.RssParserBuilder
 import kotlinx.coroutines.Dispatchers
@@ -21,10 +22,15 @@ class RssSource {
 
     private val parser by lazy { RssParserBuilder().build() }
 
-    /** 返回「拿到的新闻」与「降级说明」。 */
+    /**
+     * 返回「拿到的新闻」与「降级说明」。
+     *
+     * 每个源取 [Defaults.RSS_ITEMS_PER_FEED] 条候选，总量截到 [Defaults.RSS_MAX_CANDIDATES] ——
+     * 两个数字都是**实现细节**：候选池的宽度由"用户勾了哪些源"决定，最终讲几条由模型决定。
+     * （从前它们都是设置页上的输入框，结果是"勾了十个源也只讲三条"。）
+     */
     suspend fun fetch(
         feeds: List<RssFeed>,
-        maxItemsPerFeed: Int,
     ): Pair<List<NewsItem>, List<String>> = coroutineScope {
         val enabled = feeds.filter { it.enabled && it.url.isNotBlank() }
         if (enabled.isEmpty()) return@coroutineScope emptyList<NewsItem>() to emptyList()
@@ -45,7 +51,7 @@ class RssSource {
                 } else {
                     val items = channel.items
                         .asSequence()
-                        .take(maxItemsPerFeed)
+                        .take(Defaults.RSS_ITEMS_PER_FEED)
                         .map { item ->
                             NewsItem(
                                 source = feed.name,
@@ -60,9 +66,25 @@ class RssSource {
             }
         }.awaitAll()
 
-        val news = results.flatMap { it.first.orEmpty() }
+        // 交错而不是顺序拼接：勾了十个源时，不能让排在前面的几个源把候选名额占满 ——
+        // 那样后面的源一条都进不了提示词，用户勾了也白勾。
+        val news = interleave(results.map { it.first.orEmpty() })
+            .take(Defaults.RSS_MAX_CANDIDATES)
         val warnings = results.mapNotNull { it.second }
         news to warnings
+    }
+
+    /**
+     * 按源轮流取：第一轮取每个源的第一条、第二轮取第二条……顺序拼接做不到这件事，
+     * 而它正是"候选池跟着勾选的源走"的落点。
+     */
+    private fun interleave(perFeed: List<List<NewsItem>>): List<NewsItem> {
+        val longest = perFeed.maxOfOrNull { it.size } ?: 0
+        return buildList {
+            for (depth in 0 until longest) {
+                perFeed.forEach { items -> items.getOrNull(depth)?.let(::add) }
+            }
+        }
     }
 
     /** 摘要把 HTML 标签和实体去掉，避免"尖括号"被 TTS 念出来。 */

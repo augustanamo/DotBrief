@@ -36,7 +36,7 @@
     <string name="section_update">播报与更新</string>
     <string name="section_update_desc">点小组件是念现成的那份；想马上要一份新的，就在下面手动刷一次</string>
     <string name="section_brief">简报内容</string>
-    <string name="section_brief_desc">念多长、往前看多久、抓哪些数据</string>
+    <string name="section_brief_desc">日程往前看多久、抓哪些数据</string>
     <string name="section_tts">语音播报</string>
     <string name="section_tts_desc">决定点一下小组件之后，是谁在念给你听</string>
     <string name="section_appearance">小组件外观</string>
@@ -44,7 +44,7 @@
     <string name="section_llm">大模型接口</string>
     <string name="section_llm_desc">兼容 OpenAI 标准协议，可填 DeepSeek / OpenAI / Gemini 兼容端点 / 本地 Ollama</string>
     <string name="section_rss">新闻订阅源</string>
-    <string name="section_rss_desc">每次汇总前各抓取最新条目，再交给模型提炼三条核心快讯</string>
+    <string name="section_rss_desc">汇总前各抓最新条目，交给模型挑值得一听的讲 —— 讲几条由素材决定</string>
     <string name="label_rss_catalog">推荐源（勾选即添加）</string>
     <string name="label_rss_search">搜索源名</string>
     <string name="msg_rss_no_match">没有匹配的源，换个关键词或自己添加</string>
@@ -81,11 +81,6 @@
     <string name="label_system_prompt">系统提示词（决定播报风格）</string>
     <string name="label_tts_provider">播报引擎</string>
     <string name="label_lookahead">日程预读时长</string>
-    <string name="label_length">播报篇幅</string>
-    <string name="brief_length_short">约30秒</string>
-    <string name="brief_length_standard">约1分钟</string>
-    <string name="brief_length_long">约2分钟</string>
-    <string name="brief_length_hint">选的是"念多久"，不是字数。没什么可说的时候它会自己收短 —— 不会为了凑时长往里注水。</string>
     <string name="label_sources">参与聚合的数据源</string>
     <string name="brief_first_of_day_hint">每天第一次播报会先说今天是几月几号、星期几；同一天里再听，就直接讲事，不重复日期。天气只用"大致位置"，不需要精确站位。</string>
 

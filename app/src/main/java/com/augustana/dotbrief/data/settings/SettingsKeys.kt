@@ -33,8 +33,12 @@ internal object SettingsKeys {
 
     // ---------- 新闻流 ----------
     val RSS_FEEDS_JSON = stringPreferencesKey("rss.feeds_json")
-    val RSS_MAX_ITEMS_PER_FEED = intPreferencesKey("rss.max_items_per_feed")
-    val RSS_NEWS_COUNT = intPreferencesKey("rss.news_count")
+
+    // rss.max_items_per_feed / rss.news_count 已废弃：候选池宽度与"讲几条"都改由
+    // 勾选的源与素材量决定（见 RssConfig）。老用户的 DataStore 里可能还留着，
+    // 保存配置时顺手清掉。
+    val LEGACY_RSS_MAX_ITEMS_PER_FEED = intPreferencesKey("rss.max_items_per_feed")
+    val LEGACY_RSS_NEWS_COUNT = intPreferencesKey("rss.news_count")
 
     // ---------- 语音播报 ----------
     val TTS_PROVIDER = stringPreferencesKey("tts.provider")
@@ -80,8 +84,9 @@ internal object SettingsKeys {
     val WIDGET_ACCENT_CAROUSEL_PACE = stringPreferencesKey("widget.accent_carousel_pace")
 
     // ---------- 简报 ----------
-    /** 篇幅档位，存枚举名（见 [BriefLength]），与 CarouselPace 同一个路子。 */
-    val BRIEF_LENGTH = stringPreferencesKey("brief.length")
+    // brief.length（篇幅档位）已废弃：篇幅由素材决定，不再是一个配置项。
+    // 与 LEGACY_BRIEF_MIN_CHARS 那对键同样按"顺手清掉"处理（见 applyUserSettings）。
+    val LEGACY_BRIEF_LENGTH = stringPreferencesKey("brief.length")
     val BRIEF_SOURCES = stringSetPreferencesKey("brief.sources")
 
     /**

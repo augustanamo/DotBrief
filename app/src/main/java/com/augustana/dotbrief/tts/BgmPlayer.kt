@@ -1,7 +1,5 @@
 package com.augustana.dotbrief.tts
 
-import android.animation.Animator
-import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.content.Context
 import android.media.AudioAttributes
@@ -9,6 +7,7 @@ import android.media.AudioManager
 import android.media.MediaPlayer
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import com.augustana.dotbrief.R
 
@@ -21,15 +20,21 @@ import com.augustana.dotbrief.R
  *    短则一两秒、长则十来秒。这段时间原来**一点声音都没有**，用户只能靠桌面上那枚
  *    转圈的点阵判断"它在干活"，点了没反应就再点一次 —— 而第二下正好是"打断"。
  *    所以这一段**放开音量**播：它既是"我在响应你"的回执，也把这段等待垫过去了。
+ *
+ *    而且这**不是"等得久才有"的副产品**：命中缓存时从点击到出声只要几百毫秒，
+ *    音乐刚冒头就会被压低。所以开场有一个固定的时长下限 —— 见 [INTRO_MS]，
+ *    由调用方用 [introRemainingMs] 补齐。
  * 2. **人声底下有一层垫音**：真正开口时把音乐压到 [DUCKED_VOLUME]，让它退到背景里。
  *    念完之后不立刻掐掉，先再陪 [TAIL_HOLD_MS]，然后才收掉 ——
  *    人声一落音乐就断，听上去像"播报被砍了尾巴"。
  *
- * ## 两档音量为什么差这么多
+ * ## 三档音量，各对应一段明确的听感
  *
- * 缓冲段是**唯一没有人声**的一段，音乐是全部信息，所以给到接近满音量；
- * 人声一进来，音乐就只剩"垫底"这一个职责，再大声就是抢注意力。
- * 中间那一下压低必须是渐变（见 [fadeTo]），直接切会有塌陷感。
+ * 缓冲段是**唯一没有人声**的一段，音乐是全部信息，所以给到满音量；
+ * 人声一进来，音乐只剩"垫底"这一个职责，再大声就是抢注意力；
+ * 人声退场之后又回到 [TAIL_VOLUME] —— 最后这两秒是要让人**听见**的，
+ * 不能继续用垫底那档（否则听到的就是"跟着人声一起没了"）。
+ * 每一次切换都必须是渐变（见 [fadeTo]），直接切会有塌陷感。
  *
  * ## 为什么是"压低"而不是"停掉"
  *
@@ -49,8 +54,8 @@ import com.augustana.dotbrief.R
  *
  * 所以收尾改成**让音频自己到点播完**：停掉循环、把播放位置挪到"距曲尾
  * [TAIL_HOLD_MS] 处"，剩下这两秒多由系统放完，播完自然静音，
- * 全程不需要进程醒着。音量淡出照做，但它是锦上添花 ——
- * 就算进程在淡出途中被冻住，声音也已经到点没了。
+ * 全程不需要进程醒着。收尾**不再做音量淡出**（改成浮到 [TAIL_VOLUME]）——
+ * 淡不淡只是观感，"到点没声"这条底线由音频自己保证。
  *
  * ## ⚠️ 音量也不能只靠动画（同一个坑摔了第二次）
  *
@@ -61,8 +66,7 @@ import com.augustana.dotbrief.R
  *
  * 真机证据在 [fadeTo] 的注释里。规矩只有一句：**音量是结果，动画只是观感。**
  * 所以 [fadeTo] 总是先把音量落到目标值、再让动画从旧值重放一遍渐变，
- * 起播也从 [FADE_FLOOR] 而不是 0 起步；唯一例外是走尾巴那条
- * （`landFirst = false`），因为它另有"音频自己播完"这层兜底。
+ * 起播也从 [FADE_FLOOR] 而不是 0 起步 —— 没有例外。
  *
  * ## 循环
  *
@@ -79,6 +83,15 @@ import com.augustana.dotbrief.R
 class BgmPlayer(private val context: Context) {
 
     private val main = Handler(Looper.getMainLooper())
+
+    /**
+     * 这一轮开场是**什么时候响起来的**（`SystemClock.elapsedRealtime()`）。
+     *
+     * 0 表示没在播（BGM 关掉了、或起播失败）—— 那时 [introRemainingMs] 返回 0，
+     * 调用方就不必为一段并不存在的开场白等下去。
+     */
+    @Volatile
+    private var introAtMs = 0L
 
     private var player: MediaPlayer? = null
 
@@ -100,13 +113,34 @@ class BgmPlayer(private val context: Context) {
     private var tailing = false
 
     /**
-     * 开始播放（缓冲阶段）：从静音淡入到 [FULL_VOLUME]。
+     * 开始播放（缓冲阶段）：从 [FADE_FLOOR] 淡入到 [FULL_VOLUME]。
      *
      * 已经在播就只把音量拉回 [FULL_VOLUME] —— 那是"命中缓存、几乎立刻开口"的情形，
      * 音乐刚起来就压低，中间不该再有一次从头起播的接缝。
      */
     fun start() {
+        // 起播时刻在这里就记下，不等到主线程：人声要按"从用户点下去起算满 [INTRO_MS]"
+        // 来等待，主线程队列的排队延迟不该算进用户听到的开场里。
+        //
+        // 顺带解决一个竞态：命中缓存时会**立刻**来问 [introRemainingMs]（那一刻
+        // startInternal 可能还排在主线程队列里没跑），这里先乐观记上，
+        // "还没起播"就不会被误判成"不用等"。
+        introAtMs = SystemClock.elapsedRealtime()
         main.post { startInternal() }
+    }
+
+    /**
+     * 距"开场满 [INTRO_MS]"还差多少毫秒；没在播时返回 0。
+     *
+     * 调用方拿到正数就等这么久再开口。这条规则对**所有**路径一视同仁 ——
+     * 现场生成时模型已经花掉几秒，这里自然是 0，播报不会因此变慢；
+     * 而命中缓存（连语音都在缓存里）时从点击到出声只要几百毫秒，
+     * 全靠近这个值把开场补足。
+     */
+    fun introRemainingMs(): Long {
+        val at = introAtMs
+        if (at == 0L) return 0L
+        return (INTRO_MS - (SystemClock.elapsedRealtime() - at)).coerceAtLeast(0L)
     }
 
     /** 压到垫底音量（人声开口那一刻）。 */
@@ -196,7 +230,12 @@ class BgmPlayer(private val context: Context) {
         } catch (error: Exception) {
             Log.w(TAG, "背景音乐创建失败，本次不垫乐", error)
             null
-        } ?: return
+        } ?: run {
+            // 起播失败：把开场计时一并撤掉。留着的话调用方会为一段**并不存在**的
+            // 开场白等满 [INTRO_MS] —— 用户点了播报，先静默 2.5 秒再出声。
+            introAtMs = 0L
+            return
+        }
 
         media.isLooping = true
         // 起播取 [FADE_FLOOR] 而不是 0：淡入是"锦上添花"，"能不能听见"不是。
@@ -205,6 +244,9 @@ class BgmPlayer(private val context: Context) {
         media.setVolume(FADE_FLOOR, FADE_FLOOR)
         player = media
         volume = FADE_FLOOR
+        // 真正的起播时刻以这里为准，而不是 [start] 里那次乐观记时：
+        // 上面 `tailing` 那条分支会走一次 [stopInternal]，它把开场计时清成了 0。
+        introAtMs = SystemClock.elapsedRealtime()
         media.start()
         fadeTo(FULL_VOLUME, FADE_IN_MS)
         scheduleWatchdog(MAX_PLAY_MS)
@@ -220,6 +262,10 @@ class BgmPlayer(private val context: Context) {
         player = null
         releasing = null
         volume = 0f
+        // 没在播了，开场计时跟着清零 —— 留着的话，下一轮"还没起播"的那个窗口里
+        // [introRemainingMs] 会拿上一轮的时刻算出一个正数，让新一轮白等一场
+        // 并不存在的开场。
+        introAtMs = 0L
         if (media == null) return
 
         // 先把音量打到 0 再停：即使 release 这一步被拖住，耳朵里已经没声了。
@@ -279,10 +325,17 @@ class BgmPlayer(private val context: Context) {
             media.seekTo(duration - TAIL_HOLD_MS.toInt())
         }
 
-        // 淡出正好铺满剩下的那两秒多。进程被冻住时它跑不完也无所谓：到点自然静音。
-        // 这里传 landFirst = false —— 要的就是"慢慢弱下去"这个过程，
-        // 而"最后一定会没声"由 seekTo 到曲尾那条路保证，不靠动画。
-        fadeTo(0f, TAIL_HOLD_MS, landFirst = false)
+        // ⚠️ 尾巴这一段**不是**"从垫底一路弱到 0"，而是先**浮上来**。
+        //
+        // 上一版就是淡出到 0，主人听完的反馈是"最后还是 BGM 跟着人声停了"：
+        // 那 2.5 秒确实在放，但它一边放一边变轻，起点又只有垫底的 0.3 ——
+        // 耳朵收到的是"人声一落，音乐也跟着没了"，完全没听出"还陪你两秒"。
+        // 现在人声一退场，音乐就回到 [TAIL_VOLUME] 这个清楚的收尾音量，把话说完。
+        //
+        // 末段不做淡出：音频已被挪到曲尾前 [TAIL_HOLD_MS] 处、会自己播完，
+        // 曲尾的收束是素材自带的。而"到点一定没声"这条底线本来就由它保证，
+        // 不该再指望动画（见上面那条 VSYNC 的坑）。
+        fadeTo(TAIL_VOLUME, TAIL_RAMP_MS)
         // 兜底：completion 回调万一不来（音频异常），也不能让音乐继续循环。
         // 和上面一样，它在休眠时不执行，但那时的风险已经由"音频播完"兜住了。
         scheduleWatchdog(TAIL_HOLD_MS + FALLBACK_MS)
@@ -316,20 +369,15 @@ class BgmPlayer(private val context: Context) {
      * 动画的每一帧都去真正调 `setVolume`，而不是只在结束时设一次 ——
      * 人耳对音量**变化过程**敏感，只在头尾设值等于没渐变。
      *
-     * @param landFirst 是否先把音量直接落到 [target]、再让动画从旧值重放渐变。
-     *   默认 true：见下面那段 VSYNC 的说明 —— 音量的"结果"不能托付给动画。
-     *   只有走尾巴时传 false（那里要的就是渐弱本身）。
-     * @param onEnd 渐变结束后才做的事：目前只有"淡出完成后释放播放器"这一处需要。
+     * 不收"只走动画、不管结果"的开关，也没有结束回调 —— 这两样当初都是为
+     * "淡出到静音"准备的，而淡出已经不做了（尾巴改成浮上来，见 [tailOutInternal]）。
      */
     private fun fadeTo(
         target: Float,
         durationMs: Long = DUCK_MS,
-        landFirst: Boolean = true,
-        onEnd: (() -> Unit)? = null,
     ) {
         val from = volume
         if (from == target) {
-            onEnd?.invoke()
             return
         }
         val media = player ?: releasing
@@ -349,14 +397,9 @@ class BgmPlayer(private val context: Context) {
         // 动画正常时，它的第一帧会把音量拉回 [from]，再逐帧逼近 target ——
         // 那一下 16ms 的回跳听不出来，而它换来了"任何情况下音量都是对的"。
         //
-        // [landFirst] = false 只给"走尾巴"用：那一段要的恰恰是**渐弱**，
-        // 先落地就等于咔嚓静音 —— 用户要的"念完再陪两秒"全白留了。
-        // 它敢不要这层兜底，是因为另有保障：音频已被挪到曲尾附近，
-        // **会自己播完**；音量就算降不下来，到点也一样静音。
-        if (landFirst) {
-            volume = target
-            runCatching { media?.setVolume(target, target) }
-        }
+        // 这一段没有例外了：所有调用点都走"先落地、再放动画"。
+        volume = target
+        runCatching { media?.setVolume(target, target) }
 
         animator = ValueAnimator.ofFloat(from, target).apply {
             duration = durationMs
@@ -364,11 +407,6 @@ class BgmPlayer(private val context: Context) {
                 val value = frame.animatedValue as Float
                 volume = value
                 runCatching { media?.setVolume(value, value) }
-            }
-            if (onEnd != null) {
-                addListener(object : AnimatorListenerAdapter() {
-                    override fun onAnimationEnd(animation: Animator) = onEnd()
-                })
             }
             start()
         }
@@ -433,6 +471,18 @@ class BgmPlayer(private val context: Context) {
         private const val DUCK_MS = 400L
 
         /**
+         * 开场固定时长：从用户点下去到人声进来，音乐**至少**自己响这么久。
+         *
+         * 这是产品上刻意固定的一个节拍，对所有路径生效 —— **不靠"等模型那几秒"顺带实现**。
+         * 原因：命中缓存时正文和语音都在缓存里，从点击到出声只要几百毫秒，音乐刚冒头
+         * 就被 [duck] 压下去，听上去像被掐了一下，也丢掉了"我在响应你"这个回执。
+         * 现场生成时模型本来就花掉几秒，那时 [introRemainingMs] 返回 0，不会再加长等待。
+         *
+         * 取 2.5 秒：够把"开场"这件事交代清楚，又不至于让人等出"是不是卡住了"的念头。
+         */
+        const val INTRO_MS = 2500L
+
+        /**
          * 念完之后音乐再陪多久。
          *
          * 2–3 秒：够让人声的最后一个字"落下去"，又不至于让人觉得播报没结束。
@@ -441,6 +491,18 @@ class BgmPlayer(private val context: Context) {
          * 改它会同时改掉两件事，不要只当成一个显示用的时长。
          */
         const val TAIL_HOLD_MS = 2500L
+
+        /**
+         * 人声退场后的收尾音量。
+         *
+         * 取 [FULL_VOLUME] 的六成：比垫底（[DUCKED_VOLUME]，0.3）明显高一档，
+         * 让人**听得见**音乐还在陪你 —— 那正是尾巴存在的理由；又不至于像开头那样饱满，
+         * 免得听上去像"又开了第二段"。
+         */
+        private const val TAIL_VOLUME = 0.6f
+
+        /** 从垫底浮到 [TAIL_VOLUME] 的时长：短促一点，别拖成"渐强"。 */
+        private const val TAIL_RAMP_MS = 250L
 
         /** 兜底看门狗相对尾巴的宽限：留够 completion 回调的路程。 */
         private const val FALLBACK_MS = 8000L

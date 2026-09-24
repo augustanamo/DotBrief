@@ -191,6 +191,8 @@ class BriefPlaybackService : Service() {
         }
 
         when (action) {
+            // 用户按了停止：要的是"现在就安静"，不能让 BGM 浮上来陪两秒
+            // （见 [finish] 的 naturalEnd）。
             ACTION_STOP -> finish()
             // 正在朗读、正在合成、或正在生成，都视为"再点即打断"。
             // 少了后面两半，用户在等待时连点两下就会并发发起两次模型请求 / 两次合成。
@@ -310,6 +312,9 @@ class BriefPlaybackService : Service() {
                     val text = BriefClock.refresh(cached.lastBriefText, includeDate, LocalDateTime.now(), isAlarm = isAlarm)
                     // 语音缓存 key 用**原文**（refresh 前的 lastBriefText）而不是 text：
                     // 这样同一条正文的语音能被复用（见 speakWithCloud 里 cacheKey 的说明）。
+                    // 内容早就备好了，从点击到现在可能只过了几百毫秒 ——
+                    // 开场音乐按固定时长补齐再开口（见 awaitBgmIntro）。
+                    awaitBgmIntro()
                     speak(text, settings.tts, cacheKey = cached.lastBriefText)
                     return@launch
                 }
@@ -356,8 +361,28 @@ class BriefPlaybackService : Service() {
 
             Log.i(TAG, "生成完成，正文 ${text.length} 字")
             store.saveBrief(text)
+            // 取数 + 问模型早把开场音乐响过去了（这里通常是 0，不用等）；
+            // 但模型秒回、或退到本地简报时，也要保证那个开场节拍。
+            awaitBgmIntro()
             speak(text, settings.tts)
         }
+    }
+
+    /**
+     * 把 BGM 的开场补足到 [BgmPlayer.INTRO_MS]（没开 BGM / 没在播时立刻返回）。
+     *
+     * 为什么要有这一道闸：命中缓存时正文和语音**都在缓存里**，从点击到出声只要几百毫秒，
+     * 音乐刚冒头就被 [BgmPlayer.duck] 压低 —— 听上去像被掐了一下，也丢掉了
+     * "我在响应你"这个回执。所以开场时长不能靠"等模型那几秒"顺带实现，
+     * 它得是所有出声路径开口前都要过的一道闸。
+     *
+     * 只等差额：现场生成时模型已经花掉几秒，这里自然是 0，播报不会变慢。
+     */
+    private suspend fun awaitBgmIntro() {
+        val wait = bgmPlayer?.introRemainingMs() ?: 0L
+        if (wait <= 0L) return
+        Log.i(TAG, "开场未满，BGM 再响 ${wait}ms 才进人声")
+        delay(wait)
     }
 
     // ------------------------------------------------------------------
@@ -436,7 +461,8 @@ class BriefPlaybackService : Service() {
                         onPlaybackStarted()
                     }
 
-                    override fun onCompletion() = finish()
+                    // 人声自己念完了 —— 属于"自然结束"，让 BGM 浮上来交代结尾。
+                    override fun onCompletion() = finish(naturalEnd = true)
 
                     override fun onError(message: String) = reportError(message)
                 },
@@ -654,8 +680,15 @@ class BriefPlaybackService : Service() {
         }
     }
 
-    /** 正常收尾：回 IDLE、放掉音频焦点、撤掉前台通知、结束服务。 */
-    private fun finish() {
+    /**
+     * 收尾：回 IDLE、放掉音频焦点、撤掉前台通知、结束服务。
+     *
+     * @param naturalEnd 是不是"人声自己念完了"（而不是用户叫停 / 再点一次打断）。
+     *   这个区别**只**影响 BGM 的尾巴：念完了，音乐该浮上来把最后两秒交代完
+     *   （见 [BgmPlayer.tailOut]）；而用户按了停止，他要的是"现在就安静" ——
+     *   那时绝不能走同一条路，那会把音乐从垫底**提上来**再响两秒，等于跟用户对着干。
+     */
+    private fun finish(naturalEnd: Boolean = false) {
         if (finishing) return
         finishing = true
         Log.i(TAG, "播报结束，回到待机")
@@ -668,13 +701,20 @@ class BriefPlaybackService : Service() {
         speaking = false
         speech?.stop()
         cloudPlayer?.stop()
-        // 念完之后音乐再陪 2.5 秒才收（见 BgmPlayer.tailOut）。
-        //
-        // ⚠️ 这里**不能**改成"延迟两秒再 stop"：那个延迟在息屏 / 进程冻结时不执行，
-        // 而音频在系统媒体服务里照放 —— 用户看到的就是"音乐一直循环，只有打开应用才停"
-        // （真机复现过）。tailOut 把"什么时候没声音"交给了音频自己。
-        // 没开 BGM 开关时它会立刻回调，服务照常收尾。
-        bgmPlayer?.tailOut { endAfterTail() }
+        if (naturalEnd) {
+            // 念完了：音乐浮上来再陪 2.5 秒才收（见 BgmPlayer.tailOut）。
+            //
+            // ⚠️ 这里**不能**改成"延迟两秒再 stop"：那个延迟在息屏 / 进程冻结时不执行，
+            // 而音频在系统媒体服务里照放 —— 用户看到的就是"音乐一直循环，只有打开应用才停"
+            // （真机复现过）。tailOut 把"什么时候没声音"交给了音频自己。
+            // 没开 BGM 开关时它会立刻回调，服务照常收尾。
+            bgmPlayer?.tailOut { endAfterTail() }
+        } else {
+            // 用户叫停（或再点一次打断）：立即静音，然后马上收尾。
+            // stop() 是"立刻静音 + release"，没有"播完"这个事件可等，所以这里直接收。
+            bgmPlayer?.stop()
+            endAfterTail()
+        }
         abandonAudioFocus()
 
         scope.launch {
@@ -773,7 +813,8 @@ class BriefPlaybackService : Service() {
             rangeProgress = end.toFloat() / speechChars
         }
 
-        override fun onDone(utteranceId: String?) = finish()
+        /** 系统 TTS 念完了 —— 与云端那条路一样，属于"自然结束"。 */
+        override fun onDone(utteranceId: String?) = finish(naturalEnd = true)
 
         @Deprecated("Android 14 及以下仍会回调这个旧签名")
         override fun onError(utteranceId: String?) = reportError("播报被中断")
