@@ -184,6 +184,33 @@ fun DotMatrixText(
 }
 
 /**
+ * 眉标点阵字：分区标题与设置条目右侧那一小行英文。
+ *
+ * 和 [DotMatrixText] 是同一个画法，只是尺寸在这里**定死**成"眉标级" ——
+ * 7 行点阵总高约 11dp，正好等于一行 labelSmall，挂在哪一行旁边都不会把版面顶高。
+ * 正因为尺寸是定死的，调用方不要再传字号：同一屏里出现两种大小的眉标，
+ * 那不叫层次，那叫没对齐。
+ *
+ * 只覆盖 A-Z / 0-9，别的字符会被画成空格 —— 这条边界是有意的，
+ * 中文眉标请直接用 labelSmall，不要走点阵。
+ */
+@Composable
+fun DotEyebrow(
+    text: String,
+    modifier: Modifier = Modifier,
+    color: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+) {
+    DotMatrixText(
+        text = text,
+        modifier = modifier,
+        dotSize = 1.2.dp,
+        dotGap = 0.45.dp,
+        charGap = 1.0.dp,
+        color = color,
+    )
+}
+
+/**
  * 点阵网格底纹。
  *
  * 用来铺在黑色 logotype 区块上——Nothing 的大色块从来不是纯平面的，
@@ -291,11 +318,7 @@ fun SectionHeader(
                 modifier = Modifier.weight(1f),
             )
             if (eyebrow != null) {
-                Text(
-                    text = eyebrow.uppercase(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                DotEyebrow(text = eyebrow)
             }
         }
         if (desc != null) {
@@ -389,7 +412,7 @@ fun NothingTag(
  *
  * 用来表达"三选一"这种**档位**：比三个单选项紧凑得多，一行就能读完，
  * 而且"当前选中哪一档"在视觉上是一块实心方块，跟这套黑白版式天然合拍。
- * 选中 = 实底（反白），未选中 = 描边 —— 与按钮用的是同一套对比层级。
+ * 选中 = 品牌红实底，未选中 = 描边 —— 与实底按钮用的是同一套对比层级。
  */
 @Composable
 fun NothingSegmented(
@@ -409,15 +432,15 @@ fun NothingSegmented(
                 modifier = Modifier
                     .weight(1f)
                     .height(40.dp)
-                    .background(if (selected) scheme.primary else Color.Transparent)
-                    .border(1.dp, if (selected) scheme.primary else scheme.outline)
+                    .background(if (selected) scheme.tertiary else Color.Transparent)
+                    .border(1.dp, if (selected) scheme.tertiary else scheme.outline)
                     .clickable { onSelect(index) },
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     text = label.uppercase(),
                     style = MaterialTheme.typography.labelMedium,
-                    color = if (selected) scheme.onPrimary else scheme.onSurfaceVariant,
+                    color = if (selected) scheme.onTertiary else scheme.onSurfaceVariant,
                     maxLines = 1,
                 )
             }
@@ -496,7 +519,13 @@ fun NothingCheckbox(
     }
 }
 
-/** 开关。Material 的 Switch 保留（滑动手势很值钱），只把配色掰成黑白 + 红。 */
+/**
+ * 开关。Material 的 Switch 保留（滑动手势很值钱），只把配色掰成黑白 + 红。
+ *
+ * 开启态走**品牌红**（tertiary）而不是 primary：primary 在这套配色里是纯黑 / 纯白，
+ * 它的位置是"实底按钮的底色"；而"开"是一种**生效状态**，和 live 指示点、
+ * 单选选中点属于同一语义 —— 那一抹红就是留给它们的。
+ */
 @Composable
 fun NothingSwitch(
     checked: Boolean,
@@ -510,9 +539,9 @@ fun NothingSwitch(
         modifier = modifier,
         thumbContent = null,
         colors = SwitchDefaults.colors(
-            checkedThumbColor = scheme.onPrimary,
-            checkedTrackColor = scheme.primary,
-            checkedBorderColor = scheme.primary,
+            checkedThumbColor = scheme.onTertiary,
+            checkedTrackColor = scheme.tertiary,
+            checkedBorderColor = scheme.tertiary,
             uncheckedThumbColor = scheme.onSurfaceVariant,
             uncheckedTrackColor = Color.Transparent,
             uncheckedBorderColor = scheme.outline,
@@ -762,8 +791,12 @@ fun NothingField(
 /**
  * 按钮。
  *
- * 两种形态就够：描边（次级）与实底（主操作）。实底在白底上是纯黑块、
- * 在黑底上是纯白块 —— 永远是最高的那一档对比，一屏最多一个。
+ * 两种形态就够：描边（次级）与实底（主操作）。实底是**品牌红块**，
+ * 一屏最多一个 —— 它是整屏唯一的"重色"，也是强调色最主要的落点。
+ *
+ * 红走 tertiary：亮色下是 N-Red，暗色下自动换成提亮一档的 SignalRedLift
+ * （N-Red 直接压在纯黑上对比度不够）；文字色跟着 onTertiary 走，
+ * 于是亮色是红底白字、暗色是红底黑字，两个主题都过对比度。
  */
 @Composable
 fun NothingButton(
@@ -780,11 +813,11 @@ fun NothingButton(
         modifier = modifier
             .height(46.dp)
             .background(
-                if (filled) scheme.primary.copy(alpha = alpha) else Color.Transparent,
+                if (filled) scheme.tertiary.copy(alpha = alpha) else Color.Transparent,
             )
             .border(
                 width = 1.dp,
-                color = if (filled) scheme.primary.copy(alpha = alpha)
+                color = if (filled) scheme.tertiary.copy(alpha = alpha)
                 else scheme.outline.copy(alpha = alpha),
             )
             .clickable(enabled = enabled, onClick = onClick)
@@ -794,7 +827,7 @@ fun NothingButton(
         Text(
             text = text.uppercase(),
             style = MaterialTheme.typography.labelLarge,
-            color = if (filled) scheme.onPrimary.copy(alpha = alpha)
+            color = if (filled) scheme.onTertiary.copy(alpha = alpha)
             else scheme.onSurface.copy(alpha = alpha),
             maxLines = 1,
         )

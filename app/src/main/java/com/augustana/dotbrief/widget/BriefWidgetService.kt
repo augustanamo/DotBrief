@@ -146,7 +146,22 @@ private class BriefFrameFactory(
         return views
     }
 
-    override fun getLoadingView(): RemoteViews? = null
+    /**
+     * 数据加载期间显示什么 —— **什么都不显示**。
+     *
+     * 这里返回 null 会让系统自己造一份默认的 loading view（一个 ProgressBar，
+     * 有的 ROM 还会附一行提示文字），而它偏偏出现在**点阵正中间**的那一瞬间。
+     * 本组件的承诺是"一个字都不显示"，所以给一份全透明的空布局把它顶掉。
+     *
+     * 为什么切布局那一刻一定会走 loading：换布局 = 递给桌面一份新的 RemoteViews，
+     * 里面那个 `widget_flipper` 要重新绑一次 RemoteViewsService，而
+     * `RemoteViewsAdapter.getCount()` 在数据就绪之前返回 0 —— 空集合的那几帧就是它。
+     *
+     * 布局根只能用白名单里的类（[R.layout.widget_brief_loading] 用的 FrameLayout）；
+     * 不能图省事写 `<View>`，理由见 widget_brief.xml 里那段踩坑说明。
+     */
+    override fun getLoadingView(): RemoteViews =
+        RemoteViews(context.packageName, R.layout.widget_brief_loading)
 
     override fun getViewTypeCount(): Int = 1
 

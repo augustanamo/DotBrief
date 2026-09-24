@@ -50,7 +50,7 @@ import kotlin.math.roundToInt
  * ## 一次取两天
  *
  * 白天只用今天的数字，但**明天那份也一起取回来**：入夜之后要改说明天的天气
- * （见 [DayPart]）。等 17 点再发一次请求，要么让"点一下立刻出声"白等一个网络往返，
+ * （见 [DayPart]）。等 18 点再发一次请求，要么让"点一下立刻出声"白等一个网络往返，
  * 要么得回头改写已经生成好的简报。多取一天几乎不增加成本，却把这件事整个变简单了。
  */
 class WeatherSource(private val context: Context) {
@@ -141,7 +141,7 @@ class WeatherSource(private val context: Context) {
                 "precipitation_probability_max,uv_index_max,sunrise,sunset",
         )
         // 两天：今天 + 明天。白天的简报只用得上今天那份，但明天那份必须提前取回来 ——
-        // 等 17 点之后才发现没取，就得再发一次请求（见 WeatherInfo.tomorrow 的说明）。
+        // 等 18 点之后才发现没取，就得再发一次请求（见 WeatherInfo.tomorrow 的说明）。
         append("&timezone=auto&forecast_days=2")
     }
 

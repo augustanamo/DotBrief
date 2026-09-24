@@ -85,6 +85,32 @@ object BriefClock {
     private val STALE_TAIL_GREETING = Regex("^[，,]\\s*(早上好|上午好|中午好|下午好|晚上好|早安|晚安)")
 
     /**
+     * 开场句的收尾标点。
+     *
+     * 与 [STOPPERS] 的区别是**不认逗号**：开场句内部本来就可能带逗号
+     * （"9月23日 星期三，下午好"），拿逗号当收尾会把开场句切成两半。
+     */
+    private val SENTENCE_END_CHARS = charArrayOf('。', '！', '？', '\n')
+
+    /**
+     * 能被认成"开场句"的开头。
+     *
+     * 三种形态（见 [SpokenTime.nowText] / [SpokenTime.greetingOpen]）：
+     * - 闹钟的"现在是…"；
+     * - 纯问候"早上好"等；
+     * - 带日期的问候"9月23日 星期三，早上好"—— 以数字开头，所以要单独认出来。
+     */
+    private val OPENING_HEAD = Regex("^(现在是|早上好|上午好|中午好|下午好|晚上好|早安|晚安|\\d{1,2}月\\d{1,2}日)")
+
+    /**
+     * 开场句的长度上限。
+     *
+     * 最长的形态是闹钟那句："现在是9月23日 星期三 上午10点52分。"，22 字。
+     * 定 30 是留一点余量；真越过它说明认出来的压根不是开场句，宁可不切。
+     */
+    private const val OPENING_MAX_CHARS = 30
+
+    /**
      * 关心休息类的话：原文已包含任一就不重复加（见 [withLateNightCare]）。
      */
     private val CARE_HINT = Regex("早点休息|注意休息|早点睡|晚安|好梦|别熬夜|别熬")
@@ -124,6 +150,42 @@ object BriefClock {
     }
 
     /**
+     * 把正文切成「开场句」与「其余」两段，给语音合成分别用；认不出开场时返回 null。
+     *
+     * ## 为什么要切
+     *
+     * 两段的新鲜度完全不同：开场说的是**此刻**（"现在是上午11点" / "上午好"），
+     * 其余部分讲今天发生的事，与"什么时候念"无关。合成上却一直是整段一起送 ——
+     * 开场那句一变，整段正文的语音缓存就全废了。这正是语音缓存当年必须挂一个
+     * 15 分钟 TTL 的唯一理由（见 [com.augustana.dotbrief.tts.SpeechCache]）。
+     *
+     * 切开之后各按各的内容缓存：正文段写一次可以一直用；开场段里那些固定问候语
+     * （"早上好"这类一共五种）也只在第一次请求一次。
+     *
+     * ## 切在哪
+     *
+     * 切在开场句**结束的那个句末标点之后**（标点留在开场段里）。绝不能切在句子中间 ——
+     * 一段音频内部的语调是连续的，从中间断开会让前后两段各自"收尾 / 起头"，
+     * 念出来是明显的断句错误（与 `DoubaoTtsClient` 的分段是同一条规矩）。
+     *
+     * 开场句必须**认得出**（[OPENING_HEAD]）且**够短**（[OPENING_MAX_CHARS]）才切。
+     * 认不出就返回 null、调用方整段一起处理：模型偶尔不按格式来，那时宁可缓存粗一点
+     * 也不要在句子里下刀 —— 时间可能说旧了，但内容一个字都不丢。
+     */
+    fun splitOpening(text: String): Pair<String, String>? {
+        if (OPENING_HEAD.find(text)?.range?.first != 0) return null
+        // 第一个**句末**标点的位置；这场没有句末标点（模型写了流水句）就不切。
+        val end = text.indexOfFirst { it in SENTENCE_END_CHARS }
+        if (end < 0 || end >= OPENING_MAX_CHARS) return null
+
+        val body = text.substring(end + 1)
+        // 正文只剩空白（整篇就是一句开场）不切：切了只会多一次请求，
+        // 拼回来的还是同一段音频。
+        if (body.isBlank()) return null
+        return text.substring(0, end + 1) to body
+    }
+
+    /**
      * 深夜在结尾补一句关心休息的话。
      *
      * 缓存可能是白天生成的（结尾没有"早点休息"），而深夜播放时结尾该有这句话 ——
@@ -134,9 +196,13 @@ object BriefClock {
      * 白天生成的缓存如果恰好带了这类词，深夜播放时也不会再加一遍。
      */
     private fun withLateNightCare(text: String, hour: Int): String {
-        val care = SpokenTime.lateNightCare(hour) ?: return text
-        if (text.contains(CARE_HINT)) return text
-        val trimmed = text.trimEnd()
+        // ⚠️ 先摘掉"上一次按深夜补进去的那句" —— 这是补的**反面**，缺了它照样串：
+        // 凌晨 1 点生成（或刷新）的缓存带着"夜深了，早点休息。"，第二天上午 9 点被念出来，
+        // 开场已经换成"早上好"，结尾却还挂着这句，一段话里早晚打架。
+        val base = text.stripStaleCare()
+        val care = SpokenTime.lateNightCare(hour) ?: return base
+        if (base.contains(CARE_HINT)) return base
+        val trimmed = base.trimEnd()
         val last = trimmed.lastOrNull()
         // 原文以句读结尾就直接接上，否则补一个句号再接 ——
         // 贴心话本身带句号（"夜深了，早点休息。"）。
@@ -145,6 +211,19 @@ object BriefClock {
         } else {
             "$trimmed。$care"
         }
+    }
+
+    /**
+     * 摘掉结尾那句"按旧时刻补进去"的深夜告别。
+     *
+     * 只认**逐字**的 [SpokenTime.LATE_NIGHT_CARE]（我们自己拼的那句）。模型自己写的变体
+     * （"夜里了，早点休息"）摘不了 —— 那种情况交给缓存新鲜度挡：深夜生成的内容本来就
+     * 很少活到白天。宁可漏摘，也不要在结尾乱删一句可能是正文的话。
+     */
+    private fun String.stripStaleCare(): String {
+        val trimmed = trimEnd()
+        if (!trimmed.endsWith(SpokenTime.LATE_NIGHT_CARE)) return this
+        return trimmed.dropLast(SpokenTime.LATE_NIGHT_CARE.length)
     }
 
     /** 中英文句读都认，避免缓存正文以英文句号收尾时多出一个空格。 */

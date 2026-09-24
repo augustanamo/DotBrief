@@ -22,8 +22,8 @@ import com.augustana.dotbrief.R
  *    所以这一段**放开音量**播：它既是"我在响应你"的回执，也把这段等待垫过去了。
  *
  *    而且这**不是"等得久才有"的副产品**：命中缓存时从点击到出声只要几百毫秒，
- *    音乐刚冒头就会被压低。所以开场有一个固定的时长下限 —— 见 [INTRO_MS]，
- *    由调用方用 [introRemainingMs] 补齐。
+ *    音乐刚冒头就会被压低。所以开场有一个固定的节拍 —— 见 [DRUM_DROP_MS]，
+ *    由调用方用 [introRemainingMs] 等满。
  * 2. **人声底下有一层垫音**：真正开口时把音乐压到 [DUCKED_VOLUME]，让它退到背景里。
  *    念完之后不立刻掐掉，先再陪 [TAIL_HOLD_MS]，然后才收掉 ——
  *    人声一落音乐就断，听上去像"播报被砍了尾巴"。
@@ -32,7 +32,7 @@ import com.augustana.dotbrief.R
  *
  * 缓冲段是**唯一没有人声**的一段，音乐是全部信息，所以给到满音量；
  * 人声一进来，音乐只剩"垫底"这一个职责，再大声就是抢注意力；
- * 人声退场之后又回到 [TAIL_VOLUME] —— 最后这两秒是要让人**听见**的，
+ * 人声退场之后又回到 [TAIL_VOLUME] —— 最后这几秒是要让人**听见**的，
  * 不能继续用垫底那档（否则听到的就是"跟着人声一起没了"）。
  * 每一次切换都必须是渐变（见 [fadeTo]），直接切会有塌陷感。
  *
@@ -53,7 +53,7 @@ import com.augustana.dotbrief.R
  * 本来就关不掉 —— 用户看到的正是"只有打开应用它才停"。
  *
  * 所以收尾改成**让音频自己到点播完**：停掉循环、把播放位置挪到"距曲尾
- * [TAIL_HOLD_MS] 处"，剩下这两秒多由系统放完，播完自然静音，
+ * [TAIL_HOLD_MS] 处"，剩下这几秒由系统放完，播完自然静音，
  * 全程不需要进程醒着。收尾**不再做音量淡出**（改成浮到 [TAIL_VOLUME]）——
  * 淡不淡只是观感，"到点没声"这条底线由音频自己保证。
  *
@@ -119,8 +119,9 @@ class BgmPlayer(private val context: Context) {
      * 音乐刚起来就压低，中间不该再有一次从头起播的接缝。
      */
     fun start() {
-        // 起播时刻在这里就记下，不等到主线程：人声要按"从用户点下去起算满 [INTRO_MS]"
-        // 来等待，主线程队列的排队延迟不该算进用户听到的开场里。
+        // 起播时刻在这里就记下，不等到主线程：`MediaPlayer.create` 回来之前
+        // [introRemainingMs] 只能按墙钟估，而调用方是轮询着等的（见 awaitBgmIntro）——
+        // 主线程队列排的那点时间不该被当成"音乐已经响过了"。
         //
         // 顺带解决一个竞态：命中缓存时会**立刻**来问 [introRemainingMs]（那一刻
         // startInternal 可能还排在主线程队列里没跑），这里先乐观记上，
@@ -130,17 +131,43 @@ class BgmPlayer(private val context: Context) {
     }
 
     /**
-     * 距"开场满 [INTRO_MS]"还差多少毫秒；没在播时返回 0。
+     * 距"人声该开口的那一刻"还差多少毫秒；没在播时返回 0。
      *
-     * 调用方拿到正数就等这么久再开口。这条规则对**所有**路径一视同仁 ——
-     * 现场生成时模型已经花掉几秒，这里自然是 0，播报不会因此变慢；
-     * 而命中缓存（连语音都在缓存里）时从点击到出声只要几百毫秒，
-     * 全靠近这个值把开场补足。
+     * 判据分两段，顺序不能反：
+     *
+     * 1. **已经真正起播** —— 以音频自己的播放位置为准（`currentPosition`）。
+     *    墙钟在这里不够用：[start] 里记时刻那一下排在 `MediaPlayer.create` **之前**，
+     *    而音乐是从 create 回来之后才开始走的。拿墙钟算，人声会稳定地早到
+     *    "create 耗时"那么多 —— 对"卡鼓点"来说，那就是没卡上。
+     * 2. **还没起播**（create 还在路上）—— 退回墙钟估。调用方是轮询着等的
+     *    （见 `BriefPlaybackService.awaitBgmIntro`），一旦起播就自动切到上一条。
+     *
+     * 两段都减 [VOICE_LEAD_MS]，所以切换那一刻不会有跳变。
+     * 调用方拿到正数就等这么久再开口 —— 这对**所有**路径一视同仁：
+     * 现场生成时模型已经花掉十来秒，这里自然是 0，播报不会因此变慢。
      */
     fun introRemainingMs(): Long {
+        player?.let { media ->
+            val position = runCatching { media.currentPosition.toLong() }.getOrDefault(-1L)
+            if (position >= 0L) {
+                return (DRUM_DROP_MS - VOICE_LEAD_MS - position).coerceAtLeast(0L)
+            }
+        }
         val at = introAtMs
         if (at == 0L) return 0L
-        return (INTRO_MS - (SystemClock.elapsedRealtime() - at)).coerceAtLeast(0L)
+        val elapsed = SystemClock.elapsedRealtime() - at
+        return (DRUM_DROP_MS - VOICE_LEAD_MS - elapsed).coerceAtLeast(0L)
+    }
+
+    /**
+     * 音乐现在播到哪儿了（毫秒）；没在播返回 -1。
+     *
+     * 只给日志用：**人声开口的那一刻打一次**，读到的数就是"卡鼓点差了多少"。
+     * 期望值是 [DRUM_DROP_MS]；比它小多少，就把 [VOICE_LEAD_MS] 加多少。
+     */
+    fun positionMs(): Long {
+        val media = player ?: return -1L
+        return runCatching { media.currentPosition.toLong() }.getOrDefault(-1L)
     }
 
     /** 压到垫底音量（人声开口那一刻）。 */
@@ -232,7 +259,7 @@ class BgmPlayer(private val context: Context) {
             null
         } ?: run {
             // 起播失败：把开场计时一并撤掉。留着的话调用方会为一段**并不存在**的
-            // 开场白等满 [INTRO_MS] —— 用户点了播报，先静默 2.5 秒再出声。
+            // 开场白等满 [DRUM_DROP_MS] —— 音乐根本没响，人声却要 11 秒之后才来。
             introAtMs = 0L
             return
         }
@@ -277,11 +304,14 @@ class BgmPlayer(private val context: Context) {
     }
 
     /**
-     * 走尾巴：关掉循环、把播放位置挪到"距曲尾 [TAIL_HOLD_MS] 处"。
+     * 走尾巴：关掉循环、把播放位置挪到"距曲尾 [TAIL_HOLD_MS] + [TRACK_OUTRO_MS] 处"。
      *
      * 挪位置而不是从当前位置继续放，是因为曲子已经循环了不知道多少轮，
-     * 剩下的长度不可控 —— 只有"距末尾固定 2.5 秒"才能保证到点就停。
+     * 剩下的长度不可控 —— 只有"距末尾固定多少秒"才能保证到点就停。
      * 这一跳发生在垫底音量（[DUCKED_VOLUME]）下，听不出来。
+     *
+     * 为什么多挪 [TRACK_OUTRO_MS] 那么远：**素材自己的收尾（淡出 + 静音）不算"陪伴"**，
+     * 那段时间里音乐其实已经没了。见 [TRACK_OUTRO_MS] 里量出来的数据。
      */
     private fun tailOutInternal(onDone: () -> Unit) {
         val media = player
@@ -298,7 +328,10 @@ class BgmPlayer(private val context: Context) {
         }
 
         val duration = runCatching { media.duration }.getOrDefault(-1)
-        if (duration <= TAIL_HOLD_MS) {
+        // 尾巴要从"素材还在响的地方"开始，所以得把素材自带的收尾也一起往前让 ——
+        // 见 [TRACK_OUTRO_MS]。这就是"实际播放时长"与"听得见的时长"的区别。
+        val tailSpanMs = TAIL_HOLD_MS + TRACK_OUTRO_MS
+        if (duration <= tailSpanMs) {
             // 拿不到时长（个别编码会返回 -1），或曲子比尾巴还短：退回立即停。
             stopInternal()
             onDone()
@@ -322,23 +355,23 @@ class BgmPlayer(private val context: Context) {
         }
         runCatching {
             media.isLooping = false
-            media.seekTo(duration - TAIL_HOLD_MS.toInt())
+            media.seekTo((duration - tailSpanMs).toInt())
         }
 
         // ⚠️ 尾巴这一段**不是**"从垫底一路弱到 0"，而是先**浮上来**。
         //
         // 上一版就是淡出到 0，主人听完的反馈是"最后还是 BGM 跟着人声停了"：
-        // 那 2.5 秒确实在放，但它一边放一边变轻，起点又只有垫底的 0.3 ——
-        // 耳朵收到的是"人声一落，音乐也跟着没了"，完全没听出"还陪你两秒"。
+        // 那两秒半确实在放，但它一边放一边变轻，起点又只有垫底的 0.3 ——
+        // 耳朵收到的是"人声一落，音乐也跟着没了"，完全没听出"还陪你一会儿"。
         // 现在人声一退场，音乐就回到 [TAIL_VOLUME] 这个清楚的收尾音量，把话说完。
         //
-        // 末段不做淡出：音频已被挪到曲尾前 [TAIL_HOLD_MS] 处、会自己播完，
-        // 曲尾的收束是素材自带的。而"到点一定没声"这条底线本来就由它保证，
+        // 末段不做淡出：音频已被挪到曲尾前、会自己播完，曲尾的收束是素材自带的
+        // （那段淡出正是 [TRACK_OUTRO_MS]）。而"到点一定没声"这条底线本来就由它保证，
         // 不该再指望动画（见上面那条 VSYNC 的坑）。
         fadeTo(TAIL_VOLUME, TAIL_RAMP_MS)
         // 兜底：completion 回调万一不来（音频异常），也不能让音乐继续循环。
         // 和上面一样，它在休眠时不执行，但那时的风险已经由"音频播完"兜住了。
-        scheduleWatchdog(TAIL_HOLD_MS + FALLBACK_MS)
+        scheduleWatchdog(tailSpanMs + FALLBACK_MS)
     }
 
     /**
@@ -471,26 +504,77 @@ class BgmPlayer(private val context: Context) {
         private const val DUCK_MS = 400L
 
         /**
-         * 开场固定时长：从用户点下去到人声进来，音乐**至少**自己响这么久。
+         * 开场节拍：人声要在 BGM 的**第 11 秒**进来。
+         *
+         * 这个数不是随手定的一个时长，是**音频自己给的点**：`bgm.mp3` 前 11 秒是
+         * 一层环境垫子，第 11.00 秒底鼓才落地 —— 实测 10.90s 的低频还在 -46 dB，
+         * 11.00s 一步跳到 -8.7 dB（38 dB 的跃升），之后每 0.4~0.5 秒一个稳定的踢点。
+         * 所以"等满 11 秒再开口"和"人声落在鼓点那一刻"本来就是同一件事。
          *
          * 这是产品上刻意固定的一个节拍，对所有路径生效 —— **不靠"等模型那几秒"顺带实现**。
-         * 原因：命中缓存时正文和语音都在缓存里，从点击到出声只要几百毫秒，音乐刚冒头
-         * 就被 [duck] 压下去，听上去像被掐了一下，也丢掉了"我在响应你"这个回执。
-         * 现场生成时模型本来就花掉几秒，那时 [introRemainingMs] 返回 0，不会再加长等待。
+         * 原因：命中缓存时正文和语音都在缓存里，从点击到出声只要几百毫秒，
+         * 靠模型耗时是凑不出开场的。
          *
-         * 取 2.5 秒：够把"开场"这件事交代清楚，又不至于让人等出"是不是卡住了"的念头。
+         * ⚠️ 判据是**音频的播放位置**而不是墙钟，见 [introRemainingMs]。
+         * 改这个值之前先确认 `bgm.mp3` 没换过 —— 换素材等于换鼓点。
          */
-        const val INTRO_MS = 2500L
+        const val DRUM_DROP_MS = 11_000L
 
         /**
-         * 念完之后音乐再陪多久。
+         * 提前放行的量。
          *
-         * 2–3 秒：够让人声的最后一个字"落下去"，又不至于让人觉得播报没结束。
+         * 从"我们决定开口"到"耳朵听见第一个字"中间还有一段流水线耗时：音频要落盘、
+         * `prepareAsync` 要把播放器准备好、`start()` 之后音频设备还要起振 ——
+         * 几十到一百多毫秒，因设备和引擎而异。这段时间里音乐照常在走。
          *
-         * 这个值同时是"音频从曲尾前多远开始放"，所以它必须是**实际播完的时长** ——
-         * 改它会同时改掉两件事，不要只当成一个显示用的时长。
+         * 所以等待的终点定在 `DRUM_DROP_MS - VOICE_LEAD_MS`：让**第一个字**落在 11.00s，
+         * 而不是让"我们决定开口"落在 11.00s、人声晚到一步。
+         *
+         * 这个数是估的量级，**真机验一次就能调准**：人声开口那一刻会打一行日志
+         * （见 [positionMs]），读到的位置比 [DRUM_DROP_MS] 小多少，就把它加多少；
+         * 大了就减。只动这一个常量，别去动音频位置那套判据。
          */
-        const val TAIL_HOLD_MS = 2500L
+        const val VOICE_LEAD_MS = 120L
+
+        /**
+         * 念完之后音乐该**听得见**多久。
+         *
+         * 4 秒：够让人声的最后一个字"落下去"，也够耳朵**听出来**音乐还在陪你 ——
+         * 又不至于长到让人以为"播报还没结束"。
+         *
+         * 最初是 2.5 秒，主人听完的反馈是"音乐还是停得有点短"。**那不只是时长问题** ——
+         * "从曲尾往前数 N 秒"从来都不等于"能听到 N 秒音乐"，见 [TRACK_OUTRO_MS]。
+         *
+         * ⚠️ 它**不等于**"音频从曲尾前多远开始放"：实际是
+         * `曲尾 - TAIL_HOLD_MS - TRACK_OUTRO_MS`（见 [tailOutInternal]）。两个都要看。
+         *
+         * ⚠️ 两者之和必须显著小于 `bgm.mp3` 的时长（实测 61.99 秒）：[tailOutInternal]
+         * 里有一条保护 —— 曲子比尾巴还短时退回"立即停"，那时"挪到曲尾前"就没法用了。
+         */
+        const val TAIL_HOLD_MS = 4000L
+
+        /**
+         * `bgm.mp3` 自带的收尾时长：淡出 + 纯静音。
+         *
+         * **实测**（`afconvert -f WAVE` 转 wav 后按 0.25 秒一帧算 rms）：
+         *
+         * | 距曲尾 | rms |
+         * |---|---|
+         * | 5.50s | -15.7 dB | ← 还满着
+         * | 4.00s | -15.6 dB |
+         * | 3.00s | -27.9 dB | ← 已经开始往下走
+         * | 2.50s | -57.9 dB |
+         * | 2.00s | -92.5 dB | ← 等于没了
+         * | ≤1.75s | **-99 dB**（数字静音，一直静到曲尾） |
+         *
+         * 所以"从曲尾往前数 2.5 秒"这个窗口里，**两秒是死的**，只有 fade 的尾巴尖露出来 ——
+         * 主人说"音乐还是停得有点短"，那是**客观**的短，不是音量问题。
+         * 多让 [TRACK_OUTRO_MS] 这么远，[TAIL_HOLD_MS] 才是真的 4 秒。
+         *
+         * ⚠️ **换 `bgm.mp3` 就要重新量这个值** —— 它和 [DRUM_DROP_MS] 一样绑在素材上，
+         * 只是那条管开场、这条管收尾。
+         */
+        private const val TRACK_OUTRO_MS = 2500L
 
         /**
          * 人声退场后的收尾音量。

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  「加载中」的占位 —— 一份**全透明**的空布局。
+
+  它只服务于 RemoteViewsFactory.getLoadingView()：系统会在集合视图
+  （我们的 AdapterViewFlipper）还没拿到数据的那几帧里显示它。
+  **返回 null 不等于"不显示"** —— 那会让系统造一份默认的 loading view
+  （ProgressBar，有的 ROM 还带一行提示文字），正正当当地落在点阵中心。
+
+  组件承诺"不显示任何文字"（见 widget_brief.xml 的说明），所以这里必须是空的、透明的。
+
+  根布局只能用 RemoteViews 白名单里的类：FrameLayout / LinearLayout 都可以，
+  但 android.view.View 不在白名单里 —— 写了会让整份 RemoteViews 应用失败，
+  小组件在桌面上直接变成「无法添加微件」。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/transparent" />

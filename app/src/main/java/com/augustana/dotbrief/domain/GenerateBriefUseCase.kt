@@ -98,8 +98,8 @@ class GenerateBriefUseCase(
         return when (result) {
             is LlmResult.Success -> {
                 // 上限只是防失控的天花板 —— 篇幅本身跟着素材走，
-                // 见 Defaults.BRIEF_SANITY_MAX_CHARS。
-                val clean = sanitize(result.text, Defaults.BRIEF_SANITY_MAX_CHARS)
+                // 见 Defaults.BRIEF_MAX_CHARS（它由"五分钟 × 实测语速"换算而来）。
+                val clean = sanitize(result.text, Defaults.BRIEF_MAX_CHARS)
                 if (clean.isBlank()) {
                     // 模型这次没吐出可念的东西 —— 和调用失败同等对待，退到本地简报。
                     fallback(input, "模型返回的内容是空的")
@@ -373,7 +373,7 @@ class GenerateBriefUseCase(
 
         text = text.trim()
 
-        // 模型偶尔会超字数，硬截在句读处，避免念到一半断掉
+        // 模型偶尔会超出时长预算，硬截在句读处，避免念到一半断掉
         if (text.length > maxChars) {
             text = text.take(maxChars)
             val lastPause = text.indexOfLast { it in CHINESE_PAUSES }

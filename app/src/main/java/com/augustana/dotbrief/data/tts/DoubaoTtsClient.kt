@@ -4,6 +4,9 @@ import android.util.Log
 import com.augustana.dotbrief.data.settings.Defaults
 import com.augustana.dotbrief.data.settings.TtsConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -63,50 +66,190 @@ class DoubaoTtsClient {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    suspend fun synthesize(config: TtsConfig, text: String): SpeechResult = withContext(Dispatchers.IO) {
-        if (text.isBlank()) {
-            return@withContext SpeechResult.Failure("要朗读的内容是空的")
-        }
+    suspend fun synthesize(config: TtsConfig, text: String): SpeechResult {
+        if (text.isBlank()) return SpeechResult.Failure("要朗读的内容是空的")
         if (config.doubaoApiKey.isBlank()) {
-            return@withContext SpeechResult.Failure("还没填豆包的 API Key，先去设置页补上")
+            return SpeechResult.Failure("还没填豆包的 API Key，先去设置页补上")
         }
-        if (config.doubaoSpeaker.isBlank()) {
-            return@withContext SpeechResult.Failure("还没填音色 ID")
+        if (config.doubaoSpeaker.isBlank()) return SpeechResult.Failure("还没填音色 ID")
+
+        val chunks = splitForSpeech(text)
+        // 短文本（绝大多数情况：试听一句、三五句的本地简报）走原来的单次路径 ——
+        // 那是已经在真机上验证过的链路，没必要为它加一层分段。
+        if (chunks.size == 1) return synthesizeOnce(config, text)
+
+        Log.i(TAG, "正文 ${text.length} 字，按 $CHUNK_MAX_CHARS 字上限切成 ${chunks.size} 段并行合成")
+        return synthesizeChunked(config, chunks)
+    }
+
+    /**
+     * 一次请求合成一段文本。段长由 [splitForSpeech] 保证在 [CHUNK_MAX_CHARS] 以内。
+     *
+     * 多段时是**并行**调用的：协程各自跑在 IO 上，互不相干。
+     */
+    private suspend fun synthesizeOnce(config: TtsConfig, text: String): SpeechResult =
+        withContext(Dispatchers.IO) {
+            val payload = buildJsonObject {
+                put("user", buildJsonObject { put("uid", UID) })
+                put("namespace", NAMESPACE)
+                put(
+                    "req_params",
+                    buildJsonObject {
+                        put("text", text)
+                        put("speaker", config.doubaoSpeaker)
+                        put(
+                            "audio_params",
+                            buildJsonObject {
+                                put("format", "mp3")
+                                put("sample_rate", SAMPLE_RATE)
+                                // 一律原速：服务端吃整数百分比，0 = 不加速也不减速。
+                                // （倍率 -> 百分比的换算随 speechRate 字段一起删了。）
+                                put("speech_rate", 0)
+                            },
+                        )
+                    },
+                )
+            }.toString()
+
+            val request = Request.Builder()
+                .url(Defaults.DOUBAO_ENDPOINT)
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Connection", "keep-alive")
+                .addHeader("X-Api-Key", config.doubaoApiKey)
+                .addHeader("X-Api-Resource-Id", config.doubaoResourceId.ifBlank { Defaults.DOUBAO_RESOURCE_ID })
+                .addHeader("X-Api-Request-Id", UUID.randomUUID().toString())
+                .post(payload.toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            execute(request, ::parseStream)
         }
 
-        val payload = buildJsonObject {
-            put("user", buildJsonObject { put("uid", UID) })
-            put("namespace", NAMESPACE)
-            put(
-                "req_params",
-                buildJsonObject {
-                    put("text", text)
-                    put("speaker", config.doubaoSpeaker)
-                    put(
-                        "audio_params",
-                        buildJsonObject {
-                            put("format", "mp3")
-                            put("sample_rate", SAMPLE_RATE)
-                            // 一律原速：服务端吃整数百分比，0 = 不加速也不减速。
-                            // （倍率 -> 百分比的换算随 speechRate 字段一起删了。）
-                            put("speech_rate", 0)
-                        },
-                    )
-                },
+    /**
+     * 长文本：**并行**合成各段，再拼成一个连续音频。
+     *
+     * ## 为什么不能整段一次请求
+     *
+     * 两件事都会在五分钟的播报上暴露：
+     * 1. **长度上限**：接口对单次请求的文本长度有限制，而火山引擎文档对这套接口的口径
+     *    说法不一（"非流式 1000 / 流式 2000 个 utf-8 字符"，第三方对 v3 单向流式的描述
+     *    又是"1000 字符 ≈ 330 汉字"）—— 到底是字节还是码点说不准。1350 字正落在这个
+     *    说不准的区间里，与其赌，不如每段都远低于任何口径；
+     * 2. **首字延迟**：整段一次合成必须等全部生成完才出声。1350 字的合成时间是单段的
+     *    数倍，用户点一下要干等十几秒；并行之后等待只等于**最慢的那一段**。
+     *
+     * ## 为什么任一段失败就整条失败
+     *
+     * 只播成功的部分比报一个错更糟：用户听到的是"话说到一半没了"，而且从听感上
+     * 根本看不出是坏了 —— 他会以为今天的简报就这么短。宁可不出声，也要把原因说清楚。
+     */
+    private suspend fun synthesizeChunked(
+        config: TtsConfig,
+        chunks: List<String>,
+    ): SpeechResult = coroutineScope {
+        val results = chunks.map { chunk -> async { synthesizeOnce(config, chunk) } }.awaitAll()
+
+        val failure = results.filterIsInstance<SpeechResult.Failure>().firstOrNull()
+        if (failure != null) {
+            Log.w(TAG, "分段合成有段失败，整条作废：${failure.message}")
+            SpeechResult.Failure(failure.message)
+        } else {
+            SpeechResult.Success(
+                joinAudio(results.filterIsInstance<SpeechResult.Success>().map { it.audio }),
             )
-        }.toString()
+        }
+    }
 
-        val request = Request.Builder()
-            .url(Defaults.DOUBAO_ENDPOINT)
-            .addHeader("Content-Type", "application/json")
-            .addHeader("Connection", "keep-alive")
-            .addHeader("X-Api-Key", config.doubaoApiKey)
-            .addHeader("X-Api-Resource-Id", config.doubaoResourceId.ifBlank { Defaults.DOUBAO_RESOURCE_ID })
-            .addHeader("X-Api-Request-Id", UUID.randomUUID().toString())
-            .post(payload.toRequestBody(JSON_MEDIA_TYPE))
-            .build()
+    /**
+     * 把正文切成可以分别送合成的段。
+     *
+     * **切在句读之后**（[SENTENCE_END]），绝不在句子中间断开：一段音频内部的语调是
+     * 连续的，从中间切开会让前后两段各自"收尾 / 起头"，念出来是明显的断句错误。
+     *
+     * 单段长度上限见 [CHUNK_MAX_CHARS]。累积到装不下下一句就切一段，
+     * 所以每段都在上限以内、且尽可能长（段数越少，并发开销与拼接接缝都越少）。
+     */
+    internal fun splitForSpeech(text: String): List<String> {
+        if (text.length <= CHUNK_MAX_CHARS) return listOf(text)
 
-        execute(request, ::parseStream)
+        val chunks = mutableListOf<String>()
+        val pending = StringBuilder()
+        SENTENCE_END.split(text).forEach { sentence ->
+            if (sentence.isEmpty()) return@forEach
+            // 单句本身就超长（模型偶尔写出没有句号的流水句）：先按逗号再切一层，
+            // 仍不行就按字数硬切。宁可牺牲一点断句，也不能让某段超长把整次合成拖垮。
+            val pieces =
+                if (sentence.length <= CHUNK_MAX_CHARS) listOf(sentence)
+                else hardSplit(sentence)
+
+            pieces.forEach { piece ->
+                if (pending.isNotEmpty() && pending.length + piece.length > CHUNK_MAX_CHARS) {
+                    chunks += pending.toString()
+                    pending.clear()
+                }
+                pending.append(piece)
+            }
+        }
+        if (pending.isNotEmpty()) chunks += pending.toString()
+        return chunks
+    }
+
+    /** 超长单句的兜底切分：优先断在逗号 / 顿号 / 冒号后，实在没有标点才按字数硬切。 */
+    private fun hardSplit(sentence: String): List<String> =
+        sentence.split(CLAUSE_END)
+            .flatMap { it.chunked(CHUNK_MAX_CHARS) }
+            .filter { it.isNotEmpty() }
+
+    /**
+     * 把多段 mp3 拼成一个连续音频。
+     *
+     * 每段都是独立的一次合成，各自带自己的 ID3 标签。直接把字节连起来，第二段往后的
+     * ID3 会被解码器当成音频帧去同步 —— 轻则开头一声杂音，重则整段跳帧，所以除第一段
+     * 外都要先 [stripId3]。第一段原样保留：播放器靠它读元信息，剥了没好处。
+     *
+     * 各段的音色 / 采样率 / 码率完全一致，帧格式因此相同，拼接后就是合法的连续帧流 ——
+     * **不需要重编码**（那会额外引入一次有损转码，还多几秒）。
+     *
+     * 段间会自然带出一点停顿：每次合成在段首尾都会留极短的静音，拼起来正好是
+     * 正常的句间留白，不会听起来像"两段拼接"。
+     */
+    internal fun joinAudio(parts: List<ByteArray>): ByteArray {
+        if (parts.size == 1) return parts[0]
+        val out = ByteArrayOutputStream()
+        parts.forEachIndexed { index, part ->
+            out.write(if (index == 0) part else stripId3(part))
+        }
+        return out.toByteArray()
+    }
+
+    /**
+     * 剥掉 mp3 的 ID3 标签：头部的 ID3v2 与尾部的 ID3v1。
+     *
+     * 两者形状完全不同，所以是两段独立判断：
+     * - **ID3v2** 在文件头，前 3 字节是 `ID3`，第 4~5 字节版本、第 6 字节标志，
+     *   第 7~10 字节是长度 —— 而这 4 个字节是 **synchsafe** 的（每字节只用低 7 位，
+     *   最高位恒为 0），不能按普通大端整数读，否则长度会算大一倍；
+     * - **ID3v1** 固定 128 字节挂在文件末尾，以 `TAG` 开头。
+     */
+    internal fun stripId3(audio: ByteArray): ByteArray {
+        var start = 0
+        var end = audio.size
+
+        if (end - start >= ID3V2_HEADER && audio.matchesAscii(0, "ID3")) {
+            val size = (0..3).fold(0) { acc, i -> (acc shl 7) or (audio[6 + i].toInt() and 0x7f) }
+            start = (ID3V2_HEADER + size).coerceAtMost(end)
+        }
+
+        if (end - start >= ID3V1_SIZE && audio.matchesAscii(end - ID3V1_SIZE, "TAG")) {
+            end -= ID3V1_SIZE
+        }
+
+        return if (start == 0 && end == audio.size) audio else audio.copyOfRange(start, end)
+    }
+
+    /** 在 [at] 处是否正好是这段 ASCII。用它而不是先转字符串：只要比前几个字节，不必复制整段音频。 */
+    private fun ByteArray.matchesAscii(at: Int, expect: String): Boolean {
+        if (at < 0 || size - at < expect.length) return false
+        return expect.indices.all { this[at + it] == expect[it].code.toByte() }
     }
 
     /**
@@ -220,6 +363,29 @@ class DoubaoTtsClient {
 
         const val SAMPLE_RATE = 24000
         const val SERVER_MESSAGE_MAX_CHARS = 200
+
+        /**
+         * 单次请求的文本上限（字符数）。
+         *
+         * 取 300 是**远低于任何已知口径**的安全值 —— 见 `synthesizeChunked` 的说明：
+         * 官方文档自己就有"1000 / 2000 个 utf-8 字符"两种说法，第三方描述是
+         * "1000 字符 ≈ 330 汉字"，字节与码点分不清。无论按哪种解释，300 字都不会越界。
+         *
+         * 同时也别取得更小：段数一多，并发的连接开销和拼接接缝都会跟着涨。
+         */
+        const val CHUNK_MAX_CHARS = 300
+
+        /** ID3v2 的固定头长度（`ID3` + 版本 2 字节 + 标志 1 字节 + synchsafe 长度 4 字节）。 */
+        const val ID3V2_HEADER = 10
+
+        /** ID3v1 的固定长度，挂在文件末尾。 */
+        const val ID3V1_SIZE = 128
+
+        /** 句尾标点。切分时**保留**在上一段里，所以用零宽断言（`(?<=...)`）而不是字符类。 */
+        val SENTENCE_END = Regex("(?<=[。！？；!?;])")
+
+        /** 从句标点：只在单句超长时才用得上（见 [hardSplit]）。 */
+        val CLAUSE_END = Regex("(?<=[，、：,])")
 
         const val CONNECT_TIMEOUT_SECONDS = 10L
         const val READ_TIMEOUT_SECONDS = 45L

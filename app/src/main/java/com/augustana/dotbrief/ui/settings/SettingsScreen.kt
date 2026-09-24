@@ -94,6 +94,7 @@ import com.augustana.dotbrief.tts.TtsPreviewPlayer
 import com.augustana.dotbrief.widget.DotMatrixArt
 import com.augustana.dotbrief.ui.theme.ContentMaxWidth
 import com.augustana.dotbrief.ui.theme.DotGridBackdrop
+import com.augustana.dotbrief.ui.theme.DotEyebrow
 import com.augustana.dotbrief.ui.theme.DotMatrixText
 import com.augustana.dotbrief.ui.theme.Hairline
 import com.augustana.dotbrief.ui.theme.NothingButton
@@ -108,9 +109,6 @@ import com.augustana.dotbrief.ui.theme.NothingTag
 import com.augustana.dotbrief.ui.theme.PureBlack
 import com.augustana.dotbrief.ui.theme.PureWhite
 import com.augustana.dotbrief.ui.theme.SignalRed
-import com.augustana.dotbrief.ui.theme.SignalRedLift
-import com.augustana.dotbrief.ui.theme.StatusDot
-import com.augustana.dotbrief.ui.theme.WindowGrey
 import java.time.LocalTime
 import kotlin.math.abs
 
@@ -532,7 +530,7 @@ private fun RootPage(
         // 底部预留悬浮按钮的高度，否则最后一个分区会被压住。
         contentPadding = PaddingValues(bottom = 104.dp),
     ) {
-        item { HeroHeader(runtimeState = runtimeState) }
+        item { HeroHeader() }
 
         // 01 动作 + 两个开关（时刻表在二级页）
         item {
@@ -655,11 +653,7 @@ private fun SettingsEntry(
                             style = MaterialTheme.typography.titleSmall,
                             modifier = Modifier.weight(1f),
                         )
-                        Text(
-                            text = eyebrow.uppercase(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        DotEyebrow(text = eyebrow)
                     }
                     Spacer(Modifier.height(4.dp))
                     Text(
@@ -738,18 +732,12 @@ private fun BackBar(onBack: () -> Unit) {
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun ttsSummary(tts: TtsConfig): String {
-    val provider = stringResource(
-        when (tts.provider) {
-            TtsProvider.SYSTEM -> R.string.tts_system
-            TtsProvider.DOUBAO -> R.string.tts_doubao
-        },
-    )
-    val bgm = stringResource(
-        if (tts.bgmEnabled) R.string.summary_bgm_on else R.string.summary_bgm_off,
-    )
-    return "$provider · $bgm"
-}
+private fun ttsSummary(tts: TtsConfig): String = stringResource(
+    when (tts.provider) {
+        TtsProvider.SYSTEM -> R.string.tts_system
+        TtsProvider.DOUBAO -> R.string.tts_doubao
+    },
+)
 
 @Composable
 private fun appearanceSummary(accent: AccentColor): String {
@@ -806,25 +794,14 @@ private fun timesSummary(times: List<LocalTime>): String {
  * 两行、约 74dp，比之前那块带大标题和渐层的横幅省下近 150dp —— 打开页面
  * 第一屏就能直接看到真正要调的东西。
  *
- * 版式沿用品牌里 `NOTHING phone (2)` 的锁版关系：
- * 点阵 logotype（品牌）+ 低一级的 "widget"（产品名）+ 右侧状态灯。
+ * 版式沿用品牌里 `NOTHING phone (2)` 的锁版关系：一行点阵 logotype，没有第二个元素 ——
+ * 状态灯、版本号、widget 眉标都已撤掉，这里不报任何状态。
  *
  * 配色写死纯黑/纯白，不跟随主题：亮色主题下它就是页首那条黑带，
  * 也符合规范里"logotype 只能黑白"的硬约束。
  */
 @Composable
-private fun HeroHeader(runtimeState: WidgetRuntimeState) {
-    val live = runtimeState.state == WidgetState.PLAYING ||
-        runtimeState.state == WidgetState.GENERATING
-    // 「有待处理的新内容」和「正在出声」是两种不同的"要看这里"，
-    // 但对红灯来说它们是同一件事：这枚点阵现在有事在说。
-    val attention = live || runtimeState.unheard
-    val statusText = if (!live && runtimeState.unheard) {
-        stringResource(R.string.state_new_content)
-    } else {
-        runtimeState.state.label()
-    }
-
+private fun HeroHeader() {
     Box(
         Modifier
             .fillMaxWidth()
@@ -848,31 +825,12 @@ private fun HeroHeader(runtimeState: WidgetRuntimeState) {
                     .padding(vertical = 14.dp),
                 verticalArrangement = Arrangement.spacedBy(7.dp),
             ) {
-                Row(verticalAlignment = Alignment.Bottom) {
-                    DotMatrixText(
-                        text = "DOTBRIEF",
-                        dotSize = 3.dp,
-                        dotGap = 1.05.dp,
-                        charGap = 2.4.dp,
-                        color = PureWhite,
-                    )
-                    Spacer(Modifier.weight(1f))
-                    StatusDot(active = attention)
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = statusText.uppercase(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (attention) SignalRedLift else WindowGrey,
-                        modifier = Modifier.padding(bottom = 3.dp),
-                    )
-                }
-
-                // 只有一行眉标。这里曾经还挂着 "BUILD 0.1.0" —— 版本号是给
-                // 提 bug 的人看的，不是给用的人看的，所以从页首撤掉。
-                Text(
-                    text = stringResource(R.string.brand_eyebrow),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = WindowGrey,
+                DotMatrixText(
+                    text = "DOTBRIEF",
+                    dotSize = 3.dp,
+                    dotGap = 1.05.dp,
+                    charGap = 2.4.dp,
+                    color = PureWhite,
                 )
             }
         }
@@ -1213,16 +1171,6 @@ private fun SystemSection(
     }
 }
 
-@Composable
-private fun WidgetState.label(): String = stringResource(
-    when (this) {
-        WidgetState.IDLE -> R.string.state_idle
-        WidgetState.GENERATING -> R.string.state_generating
-        WidgetState.PLAYING -> R.string.state_playing
-        WidgetState.ERROR -> R.string.state_error
-    },
-)
-
 // ---------------------------------------------------------------------------
 // 05 大模型接口
 // ---------------------------------------------------------------------------
@@ -1416,13 +1364,6 @@ private fun LlmProfileItem(
                 }
             }
 
-            // 与旧版同一段说明：发散度/超时/系统提示词三个调优参数退回 Defaults，
-            // 这里只留三件"只有用户知道"的事。
-            Text(
-                text = stringResource(R.string.llm_tuning_hidden_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
 }
@@ -1941,31 +1882,9 @@ private fun TtsSection(
 
         Hairline(color = MaterialTheme.colorScheme.outlineVariant)
 
-        // ---- 背景音乐：等待那几秒垫一段，开口后压到垫底 ----
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.tts_bgm_enabled),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Text(
-                    text = stringResource(R.string.tts_bgm_enabled_desc),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            NothingSwitch(
-                checked = tts.bgmEnabled,
-                onCheckedChange = { onChange(draft.copy(tts = tts.copy(bgmEnabled = it))) },
-            )
-        }
-
-        // 语速 / 音调两个滑块已移除（见 TtsConfig 的注释）：“试听一句”留着 ——
-        // 它的用处是当场验证 Key 与音色配得对不对，跟语速无关。
+        // 背景音乐不设开关：它和"开场卡鼓点"是同一件事，属于固定的产品节拍，
+        // 不是音效选项（见 `TtsConfig.bgmEnabled`）。语速 / 音调两个滑块也已移除
+        // （见 `TtsConfig` 的注释）——「试听一句」留着，用来当场验证 Key 与音色配得对不对。
         NothingButton(
             text = stringResource(R.string.action_preview),
             onClick = onPreviewSpeech,

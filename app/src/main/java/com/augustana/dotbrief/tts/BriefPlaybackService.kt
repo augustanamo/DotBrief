@@ -41,7 +41,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -276,7 +279,21 @@ class BriefPlaybackService : Service() {
             // 原先这段时间完全静默。先放背景音乐把它垫过去：它既是
             // “我在响应你”的回执，也免得用户以为没点到而再点一次 ——
             // 那第二下正好是“打断”。开口之后由 [onPlaybackStarted] 压到垫底音量。
-            if (settings.tts.bgmEnabled) bgmPlayer?.start()
+            // 背景音乐是自带的、恒开的：设置页已撤掉那个开关。它不是音效选项，
+            // 而是「开场固定节拍」的一部分（开场 11 秒等鼓点落下来）。
+            bgmPlayer?.start()
+
+            // 点下去之后、开口之前，点阵必须是**亮着的**（彩色静止）。
+            //
+            // 这一推不能省，而且只能放在这里：**缓存命中那条路不经过下面的
+            // GENERATING**（它跳过取数与模型，直接就 speak 了），少了这一句，
+            // 已经听过的内容被重新点起时，点阵会一直停在灰色待机的样子 ——
+            // 而 BGM 已经在响，看起来就像"点了没点着"。
+            //
+            // 用 GENERATING 而不是 PLAYING：人声还没出来，点阵不该开始流动
+            // （流动的语义是"正在念给你听"）。开口那一刻由 [onPlaybackStarted] 接手。
+            store.setState(WidgetState.GENERATING)
+            BriefWidgetProvider.applyState(this@BriefPlaybackService, WidgetState.GENERATING, false)
 
             val cached = store.snapshot()
 
@@ -310,20 +327,21 @@ class BriefPlaybackService : Service() {
                     // includeDate 用与现场生成同一判据：今天还没报过日期才带日期。
                     val includeDate = cached.lastGreetedDay != LocalDate.now().toEpochDay()
                     val text = BriefClock.refresh(cached.lastBriefText, includeDate, LocalDateTime.now(), isAlarm = isAlarm)
-                    // 语音缓存 key 用**原文**（refresh 前的 lastBriefText）而不是 text：
-                    // 这样同一条正文的语音能被复用（见 speakWithCloud 里 cacheKey 的说明）。
+                    // 语音缓存改成"按段 + 按内容"（见 speakWithCloud）：正文段与
+                    // refresh 前的原文一模一样，所以哪怕语音是一小时前合成的也照样命中，
+                    // 不必再拿原文当 key。
                     // 内容早就备好了，从点击到现在可能只过了几百毫秒 ——
-                    // 开场音乐按固定时长补齐再开口（见 awaitBgmIntro）。
+                    // 人声要等满开场那个固定节拍（第 11 秒的鼓点）再进，见 awaitBgmIntro。
                     awaitBgmIntro()
-                    speak(text, settings.tts, cacheKey = cached.lastBriefText)
+                    speak(text, settings.tts)
                     return@launch
                 }
                 Log.i(TAG, "缓存已过期（生成于 ${cached.lastBriefAtEpochSeconds}），重新生成")
             }
 
             // ---- 没有可复用的，现场生成 ----
-            store.setState(WidgetState.GENERATING)
-            BriefWidgetProvider.applyState(this@BriefPlaybackService, WidgetState.GENERATING, false)
+            // 状态在上面（BGM 起播处）已经推成 GENERATING 了 —— 那一次覆盖了
+            // "缓存命中"与"现场生成"两条路，这里不再推第二遍。
             updateNotification(getString(R.string.notif_generating))
 
             val outcome = try {
@@ -361,7 +379,7 @@ class BriefPlaybackService : Service() {
 
             Log.i(TAG, "生成完成，正文 ${text.length} 字")
             store.saveBrief(text)
-            // 取数 + 问模型早把开场音乐响过去了（这里通常是 0，不用等）；
+            // 取数 + 问模型通常早把开场那 11 秒响过去了（这里返回 0，不用等）；
             // 但模型秒回、或退到本地简报时，也要保证那个开场节拍。
             awaitBgmIntro()
             speak(text, settings.tts)
@@ -369,20 +387,49 @@ class BriefPlaybackService : Service() {
     }
 
     /**
-     * 把 BGM 的开场补足到 [BgmPlayer.INTRO_MS]（没开 BGM / 没在播时立刻返回）。
+     * 等满开场节拍：人声要在 BGM 的 [BgmPlayer.DRUM_DROP_MS]（第 11 秒的鼓点）进来
+     * （没开 BGM / 不播音乐时立刻返回）。
      *
      * 为什么要有这一道闸：命中缓存时正文和语音**都在缓存里**，从点击到出声只要几百毫秒，
      * 音乐刚冒头就被 [BgmPlayer.duck] 压低 —— 听上去像被掐了一下，也丢掉了
-     * "我在响应你"这个回执。所以开场时长不能靠"等模型那几秒"顺带实现，
+     * "我在响应你"这个回执。所以开场不能靠"等模型那几秒"顺带实现，
      * 它得是所有出声路径开口前都要过的一道闸。
      *
-     * 只等差额：现场生成时模型已经花掉几秒，这里自然是 0，播报不会变慢。
+     * ⚠️ **为什么是轮询，而不是"算一次差额、睡一次"**：
+     * 这个函数是在 `bgmPlayer.start()` 之后**立刻**被调到的，那一刻
+     * `MediaPlayer.create` 多半还没回来，[BgmPlayer.introRemainingMs] 只能按墙钟估；
+     * 等它真正起播之后，判据才切到音频自己的播放位置（见那里的注释）。
+     * 一口价睡到底是致命的：睡着的那几秒里判据升级了，可我们再也醒不来问它 ——
+     * 人声会稳定地早到"create 耗时"那么多，鼓点就卡不上了。
+     *
+     * 只等差额：现场生成时模型已经花掉十来秒，这里自然是 0，播报不会因此变慢。
      */
     private suspend fun awaitBgmIntro() {
-        val wait = bgmPlayer?.introRemainingMs() ?: 0L
-        if (wait <= 0L) return
-        Log.i(TAG, "开场未满，BGM 再响 ${wait}ms 才进人声")
-        delay(wait)
+        val player = bgmPlayer ?: return
+        var elapsed = 0L
+        var polls = 0
+        while (true) {
+            val wait = player.introRemainingMs()
+            if (wait <= 0L) break
+            if (elapsed >= MAX_INTRO_WAIT_MS) {
+                Log.w(
+                    TAG,
+                    "开场等了 ${elapsed}ms 还没到鼓点（BGM 位置 ${player.positionMs()}ms），直接开口",
+                )
+                return
+            }
+            val slice = wait.coerceAtMost(INTRO_POLL_MS)
+            delay(slice)
+            elapsed += slice
+            polls++
+        }
+        if (polls > 0) {
+            Log.i(
+                TAG,
+                "开场节拍到点：轮询 ${polls} 轮 / ${elapsed}ms，BGM 位置 ${player.positionMs()}ms" +
+                    "（鼓点在 ${BgmPlayer.DRUM_DROP_MS}ms）",
+            )
+        }
     }
 
     // ------------------------------------------------------------------
@@ -398,59 +445,39 @@ class BriefPlaybackService : Service() {
      * 对外表现必须一致：都在**真正出声那一刻**把桌面切到 PLAYING，
      * 都在念完后回 IDLE。否则用户会看到"动效开始了但没声音"或反之。
      */
-    private fun speak(text: String, tts: TtsConfig, cacheKey: String? = null) {
+    private fun speak(text: String, tts: TtsConfig) {
         Log.i(TAG, "开始朗读，引擎=${tts.provider}，正文 ${text.length} 字")
         // 进度取数要按引擎分流，所以这两样必须记在字段上（ticker 是另一条协程）。
         engine = tts.provider
         speechChars = text.length
         when (tts.provider) {
             TtsProvider.SYSTEM -> speakWithSystem(text)
-            TtsProvider.DOUBAO -> speakWithCloud(text, tts, cacheKey)
+            TtsProvider.DOUBAO -> speakWithCloud(text, tts)
         }
     }
 
-    private fun speakWithCloud(text: String, tts: TtsConfig, cacheKey: String?) {
+    /**
+     * 云端合成 + 播放。
+     *
+     * ## 按段缓存（2026-09-24 改）
+     *
+     * 正文被 [BriefClock.splitOpening] 切成「开场句」和「其余」两段，各自按**文本内容**
+     * 查缓存、各自决定要不要发请求（切不开时整段当一个部分）。
+     *
+     * 这样换来了三件事：
+     * - **其余那段里不含任何与"什么时候念"绑定的内容，所以写一次可以一直用** ——
+     *   主人问的"除了第一次不先请求，后面就好了吧"，答案就在这里；
+     * - 开场那句里的固定问候语（"早上好"这类一共五种）第一次之后也永远命中；
+     * - 缺的那几段是**并行**请求的，等待只等于较慢的那一段，而不是两段相加。
+     *
+     * 段与段之间用 `DoubaoTtsClient.joinAudio` 拼成一个 mp3 —— 播放链路
+     * （BGM 三档、卡鼓点、进度、缓存、打断）一行都没改：它看到的仍是一个完整音频。
+     */
+    private fun speakWithCloud(text: String, tts: TtsConfig) {
         synthesisJob = scope.launch {
             updateNotification(getString(R.string.notif_synthesizing))
 
-            // ---- 先查语音缓存 ----
-            // 缓存的 key 用"这条内容的原文"（cacheKey，通常就是 [RuntimeStateStore] 里的
-            // lastBriefText），而不是合成输入 text —— 因为命中正文缓存时 text 已被
-            // BriefClock.refresh 换过开场时间句，拿它当 key 每次都不一样，缓存永远命不中。
-            val key = cacheKey ?: text
-            val cached = container.speechCache.get(key)
-            val audio: ByteArray
-            if (cached != null) {
-                Log.i(TAG, "命中语音缓存（${cached.size} 字节），跳过合成")
-                updateNotification(getString(R.string.notif_playing_text))
-                audio = cached
-            } else {
-                val result = try {
-                    container.doubaoTtsClient.synthesize(tts, text)
-                } catch (cancellation: CancellationException) {
-                    throw cancellation
-                } catch (error: Exception) {
-                    Log.w(TAG, "语音合成时抛出未捕获异常", error)
-                    SpeechResult.Failure("语音合成出错：${error.javaClass.simpleName}")
-                }
-
-                if (finishing) return@launch
-
-                audio = when (result) {
-                    is SpeechResult.Success -> {
-                        // 合成成功顺手写缓存，下次同一条内容（key 相同）就直接播
-                        container.speechCache.put(key, result.audio)
-                        result.audio
-                    }
-
-                    is SpeechResult.Failure -> {
-                        reportError(result.message)
-                        return@launch
-                    }
-                }
-
-                Log.i(TAG, "合成完成，${audio.size} 字节，交给播放器")
-            }
+            val audio = synthesizeAudio(text, tts) ?: return@launch
 
             requestAudioFocus()
             cloudPlayer?.play(
@@ -468,6 +495,60 @@ class BriefPlaybackService : Service() {
                 },
             )
         }
+    }
+
+    /**
+     * 拿到整段可播的音频：能命中缓存的部分命中，缺的那些**并行**去合成。
+     *
+     * 失败返回 null（原因已经报给用户了）。**任一段失败就整条失败** ——
+     * 只播成功的部分比报错更糟：听起来像"今天的话就这么短"，
+     * 从听感上根本查不出是坏了。
+     */
+    private suspend fun synthesizeAudio(text: String, tts: TtsConfig): ByteArray? {
+        val segments = BriefClock.splitOpening(text)?.let { listOf(it.first, it.second) }
+            ?: listOf(text)
+
+        val results: List<SpeechResult> = coroutineScope {
+            segments.map { segment -> async { synthesizeSegment(segment, tts) } }.awaitAll()
+        }
+
+        val failure = results.filterIsInstance<SpeechResult.Failure>().firstOrNull()
+        if (failure != null) {
+            Log.w(TAG, "分段合成有段失败，整条作废：${failure.message}")
+            // 用户点了打断 → 协程被取消，这不是"合成失败"，不该报错。
+            if (!finishing) reportError(failure.message)
+            return null
+        }
+
+        val audios = results.filterIsInstance<SpeechResult.Success>().map { it.audio }
+        // 单段时 joinAudio 原样返回，短文本因此仍走"一个文件"的老路。
+        return container.doubaoTtsClient.joinAudio(audios)
+    }
+
+    /**
+     * 合成一段：先查缓存，没有再请求，成功顺手写回。
+     *
+     * 缓存的 key 就是**这段文字本身**（见 [SpeechCache]）—— 于是同一段文字永远对应
+     * 同一个文件，与"第几次播报""什么时候播"无关。正文段因此能一直用下去，
+     * 开场段里的固定问候语同理。
+     */
+    private suspend fun synthesizeSegment(segment: String, tts: TtsConfig): SpeechResult {
+        container.speechCache.get(segment)?.let {
+            Log.i(TAG, "命中语音缓存（${it.size} 字节 / ${segment.length} 字），跳过合成")
+            return SpeechResult.Success(it)
+        }
+
+        val result = try {
+            container.doubaoTtsClient.synthesize(tts, segment)
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (error: Exception) {
+            Log.w(TAG, "语音合成时抛出未捕获异常", error)
+            SpeechResult.Failure("语音合成出错：${error.javaClass.simpleName}")
+        }
+
+        if (result is SpeechResult.Success) container.speechCache.put(segment, result.audio)
+        return result
     }
 
     private fun speakWithSystem(text: String) {
@@ -542,7 +623,13 @@ class BriefPlaybackService : Service() {
         speaking = true
         // 人声出来了，背景音乐退到垫底音量（见 [BgmPlayer.duck]）。
         bgmPlayer?.duck()
-        Log.i(TAG, "已经开口（onStart 回调），桌面切到 PLAYING")
+        // 把开口那一刻的音乐位置打进日志：这是"卡鼓点卡得准不准"唯一的一手证据。
+        // 读到的数应当接近 [BgmPlayer.DRUM_DROP_MS]；差多少就调 [BgmPlayer.VOICE_LEAD_MS]。
+        Log.i(
+            TAG,
+            "已经开口（onStart 回调），桌面切到 PLAYING；BGM 位置 " +
+                "${bgmPlayer?.positionMs() ?: -1L}ms（鼓点在 ${BgmPlayer.DRUM_DROP_MS}ms）",
+        )
 
         // 进度必须在切布局**之前**复位：桌面一拿到 playing 布局就会去绑 adapter 取帧，
         // 那一刻读到的进度必须已经是 0，否则第一帧画的是上一轮的残留进度。
@@ -920,6 +1007,24 @@ class BriefPlaybackService : Service() {
         private const val CHANNEL_ID = "brief_playback"
         private const val NOTIFICATION_ID = 0x2101
         private const val UTTERANCE_ID = "brief-playback"
+
+        /**
+         * 开场等待的轮询间隔。
+         *
+         * 两重身份：一是"判据多快能升级到音频播放位置"的粒度，二是最后一段的落点精度。
+         * 取 40ms —— 一个八分音符是 250ms 量级，40ms 连它的零头都不到；
+         * 再密只会白烧 CPU（每轮都要读一次播放位置）。
+         */
+        private const val INTRO_POLL_MS = 40L
+
+        /**
+         * 开场等待的上限。
+         *
+         * 正常路径是 11 秒左右。给到 [BgmPlayer.DRUM_DROP_MS] + 5 秒纯粹是防卡住：
+         * 用户在这一段里按了暂停（音频位置不再前进）、或播放器出了状况，
+         * 播报不能无限期地停在门口 —— 宁可早一点开口。
+         */
+        private const val MAX_INTRO_WAIT_MS = 16_000L
 
         /** 点小组件时那一下短震的时长。再长就从"回执"变成"打扰"了。 */
         private const val BUZZ_MS = 25L

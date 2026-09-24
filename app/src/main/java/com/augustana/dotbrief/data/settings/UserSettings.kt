@@ -217,7 +217,8 @@ data class TtsConfig(
      * 播报时垫一层背景音乐（`res/raw/bgm.mp3`）。
      *
      * 两个作用，见 `BgmPlayer` 的说明：等待模型的那几秒先放音乐（那段原来是完全静默的），
-     * 真正开口后压到垫底音量。关掉则整段都不放，回到纯粹的语音播报。
+     * 真正开口后压到垫底音量。**恒开**：设置页已撤掉这个开关 —— 它属于固定的产品节拍，
+     * 不是可选项。字段留着只为兼容旧配置的读写。
      */
     val bgmEnabled: Boolean = Defaults.TTS_BGM_ENABLED,
 
@@ -253,7 +254,7 @@ data class BriefConfig(
     // 那三档两头都不讨好 —— 素材多的日子（十条都值得说的快讯）被硬砍到两分钟，
     // 素材少的日子（只有天气加一条日程）又被下限逼着注水。现在篇幅规则直接写在
     // 系统提示词里（见 [Defaults.SYSTEM_PROMPT] 第 8 条），
-    // 代码层只留一个防失控的天花板（见 [Defaults.BRIEF_SANITY_MAX_CHARS]）。
+    // 代码层只留一个防失控的天花板（见 [Defaults.BRIEF_MAX_CHARS]）。
     val sources: Set<BriefSource> = Defaults.BRIEF_SOURCES,
 
     /** 到点自动刷新内容（只生成、不出声）。 */
