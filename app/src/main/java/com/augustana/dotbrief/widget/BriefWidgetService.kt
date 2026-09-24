@@ -62,6 +62,7 @@ private class BriefFrameFactory(
 
         // "有没有新内容"要查一次通知库才算得出来，帧工厂里允许阻塞（系统在子线程回调），
         // 所以这里当场算，而不是等谁把它塞进 DataStore。
+        // 两个时间戳都传：定时刷出来的正文同样意味着"有新内容"。
         val unheard = if (app == null || runtime == null) {
             false
         } else {
@@ -69,6 +70,7 @@ private class BriefFrameFactory(
                 BriefFreshness.resolve(
                     dao = app.container.capturedNotificationDao,
                     lastHeardAtEpochSeconds = runtime.lastHeardAtEpochSeconds,
+                    lastBriefAtEpochSeconds = runtime.lastBriefAtEpochSeconds,
                 )
             }
         }
@@ -129,7 +131,17 @@ private class BriefFrameFactory(
 
         views.setImageViewBitmap(
             R.id.frame_image,
-            DotMatrixArt.render(artSizePx, glow, accent, hueShift, muted = muted),
+            DotMatrixArt.render(
+                artSizePx,
+                glow,
+                accent,
+                hueShift,
+                muted = muted,
+                // 只有播报中才有进度可言（这个序列本身也只在播报中存在）。
+                // 多这一道判断是为了防止"布局还停在 playing、进度已复位"的瞬间画出全彩的一帧：
+                // 复位与切布局之间有一段异步窗口，宁可这半秒不上进度，也不要它闪一下。
+                progress = if (playing) BriefProgress.value else 0f,
+            ),
         )
         return views
     }

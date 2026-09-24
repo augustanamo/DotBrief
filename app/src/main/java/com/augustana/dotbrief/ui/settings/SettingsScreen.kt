@@ -1,5 +1,6 @@
 package com.augustana.dotbrief.ui.settings
 
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -19,28 +20,40 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TimePicker
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -60,17 +73,24 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import kotlinx.coroutines.delay
 import com.augustana.dotbrief.R
 import com.augustana.dotbrief.data.settings.AccentColor
+import com.augustana.dotbrief.data.settings.BriefLength
 import com.augustana.dotbrief.data.settings.BriefSource
 import com.augustana.dotbrief.data.settings.CarouselPace
+import com.augustana.dotbrief.data.settings.LlmConfig
+import com.augustana.dotbrief.data.llm.LlmCallLogEntry
+import com.augustana.dotbrief.data.settings.RSS_CATALOG_GROUPS
 import com.augustana.dotbrief.data.settings.RssConfig
+import com.augustana.dotbrief.data.settings.RssCatalogGroup
 import com.augustana.dotbrief.data.settings.RssFeed
 import com.augustana.dotbrief.data.settings.TtsConfig
 import com.augustana.dotbrief.data.settings.TtsProvider
 import com.augustana.dotbrief.data.settings.UserSettings
 import com.augustana.dotbrief.data.settings.WidgetRuntimeState
 import com.augustana.dotbrief.data.settings.WidgetState
+import com.augustana.dotbrief.domain.BriefSchedule
 import com.augustana.dotbrief.tts.TtsPreviewPlayer
 import com.augustana.dotbrief.widget.DotMatrixArt
 import com.augustana.dotbrief.ui.theme.ContentMaxWidth
@@ -88,13 +108,11 @@ import com.augustana.dotbrief.ui.theme.NothingSwitch
 import com.augustana.dotbrief.ui.theme.NothingTag
 import com.augustana.dotbrief.ui.theme.PureBlack
 import com.augustana.dotbrief.ui.theme.PureWhite
+import com.augustana.dotbrief.ui.theme.SignalRed
 import com.augustana.dotbrief.ui.theme.SignalRedLift
 import com.augustana.dotbrief.ui.theme.StatusDot
-import com.augustana.dotbrief.ui.theme.TechRow
 import com.augustana.dotbrief.ui.theme.WindowGrey
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
+import java.time.LocalTime
 import kotlin.math.abs
 
 /**
@@ -114,43 +132,112 @@ import kotlin.math.abs
  * - 全部直角（圆角令牌已在 Theme 里归零）；
  * - 一屏只有一处红：状态灯 / 选中态 / 授权标签 —— 颜色是稀缺资源。
  *
- * ## 结构
+ * ## 结构：一级页 + 二级页
  *
- * `HeroHeader`（纯黑点阵 logotype 区块）→ 八个编号分区 → 底部固定操作条。
+ * 一级页 = `HeroHeader`（纯黑点阵 logotype 区块）→ 01 动作 → 02 简报内容 →
+ * 五个带摘要的二级页入口 → 底部固定操作条，大约两屏。
+ * 二级页 = 顶部返回条 + 该分区的完整内容。
+ *
+ * 为什么分两级、哪些进二级，见 [Destination] 的注释 —— 一句话版本：
+ * 一级页只留"动作 + 天天要碰的"，其余收进二级页，但每一项都在一级
+ * 显示当前值的摘要，所以一级页同时还是一张"我现在配了什么"的总览表。
+ *
  * Hero 永远是纯黑，因为品牌规范里 logotype 只能是黑白；亮色主题下
  * 它就成了页面顶部那条"黑带"，黑带下面是纸白 —— 经典的黑白对照。
  */
+
+/**
+ * 设置页的层级：**一级页 + 二级页**。
+ *
+ * ## 为什么不是全平铺，也不是全菜单
+ *
+ * 全平铺（原来那样）的问题不是"长"，是**三类东西混在一页里**：
+ * 动作（立即播报 / 刷新 / 停止）、高频调节（篇幅、来源、自动刷新开关）、
+ * 一次配置（API Key、音色、18 个 RSS 勾选）。第三类配完再也不动，
+ * 却把天天要碰的前两类挤到了好几屏之外。
+ *
+ * 全菜单（进来只有 7 个入口块）能治"长"，但它把信息**藏**起来了，
+ * 代价是丢掉"总览"——打开设置页最常见的动机之一就是"我现在配的是什么"，
+ * 全收进二级之后得进 7 个页面才知道。7 个分区、约 30 个控件是"一页装得下"的量级，
+ * 不值得为省滚动付 7 次跳转。
+ *
+ * ## 所以：混合式
+ *
+ * 一级页留**动作 + 天天要碰的**，其余收进二级页。收进二级的每一项
+ * 都必须在一级显示**当前值的摘要**（见 [SettingsEntry]）—— 摘要是这套方案
+ * 成立的前提：没有它，这就是全菜单的退化版；有了它，一级页反而比全平铺时更有用，
+ * 因为它变成了一张"我现在配了什么"的总览表。
+ *
+ * ## 分流规则
+ *
+ * 进二级：要连续填 ≥2 个输入框（03 豆包三格、05 模型）/ 一长串勾选超过 6 项（06 RSS）/
+ * 配一次就再不动（07 权限）/ 需要大画面才调得准（04 外观，二级页给它整屏预览）。
+ * 留一级：是动作不是设置 / 天天碰 / 状态需要被看见。
+ */
+private enum class Destination {
+    /** 一级页：动作 + 播报开关 + 简报内容 + 五个带摘要的入口。 */
+    ROOT,
+
+    /** 01 的两张时刻表（自动刷新 / 定时播报）—— 配一次就再不动，但改动频繁到值得单独一页。 */
+    SCHEDULE,
+
+    TTS,
+    APPEARANCE,
+    LLM,
+    RSS,
+    PERMISSION,
+}
+
 @Composable
 fun SettingsScreen(
     state: SettingsViewModel.UiState,
     runtimeState: WidgetRuntimeState,
+    logEntries: List<LlmCallLogEntry>,
     onChange: (UserSettings) -> Unit,
     onSave: () -> Unit,
     onReset: () -> Unit,
     onAddFeed: (String, String) -> Unit,
     onRemoveFeed: (String) -> Unit,
     onToggleFeed: (String, Boolean) -> Unit,
+    onTogglePresetFeed: (RssFeed, Boolean) -> Unit,
     onPreviewSpeech: () -> Unit,
     onPlayBriefNow: () -> Unit,
+    onUpdateBriefNow: () -> Unit,
     onStopBrief: () -> Unit,
     onProbeLlm: () -> Unit,
+    onAddLlmProfile: () -> Unit,
+    onRemoveLlmProfile: (String) -> Unit,
+    onMoveLlmProfileToFront: (String) -> Unit,
+    onSelectLlmProfile: (String) -> Unit,
+    onClearLog: () -> Unit,
     onConsumeMessage: () -> Unit,
 ) {
     val context = LocalContext.current
-    val snackbarHostState = remember { SnackbarHostState() }
+
+    // ---- 当前在哪一层。分流理由见 [Destination] ----
+    var destination by rememberSaveable { mutableStateOf(Destination.ROOT) }
+
+    // 系统返回键：在二级页里先回一级。不接的话按返回会直接退出整个设置页，
+    // 而用户按返回时的心理模型是"退回上一级"。
+    BackHandler(enabled = destination != Destination.ROOT) {
+        destination = Destination.ROOT
+    }
+
+    // 一级页的滚动位置必须挂在**这一层**：Crossfade 切走时一级页会离开组合，
+    // 状态写在它内部就跟着销毁，从二级页返回会莫名其妙跳回顶部。
+    val rootListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
+
+    // 弹窗开关统一放在这一层：AlertDialog 是**独立于列表的浮层**，挂在 LazyColumn 的
+    // item 里会随滚动被回收，滚一下就自己关了。
     var showAddFeedDialog by remember { mutableStateOf(false) }
+    var showAddTimeDialog by remember { mutableStateOf(false) }
+    var showAddAlarmTimeDialog by remember { mutableStateOf(false) }
 
     // 「恢复默认」必须先弹一次确认，理由见 ResetConfirmDialog 的注释 —— 这个按钮
     // 和「保存配置」并排在同一行，误触的代价是连 API Key 一起清空。
     var showResetConfirm by remember { mutableStateOf(false) }
 
-    // 「高级设置」默认折叠 —— 但**没配好就自动展开**：
-    // 一个刚装完的用户必须能找到 API Key 入口，而一个已经用了两周的用户
-    // 没必要每次滚过一屏再也用不到的字段。默认值跟着"是否已配置"走，
-    // 比给一个固定的 true/false 更贴近真实意图。
-    var advancedExpanded by rememberSaveable {
-        mutableStateOf(state.draft.llm.apiKey.isBlank() || state.draft.rss.feeds.isEmpty())
-    }
+    var showLogDialog by remember { mutableStateOf(false) }
 
     // 权限状态：进入页面与从系统设置返回时都重新读一次
     var hasCalendar by remember { mutableStateOf(context.hasCalendarPermission()) }
@@ -180,113 +267,174 @@ fun SettingsScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    LaunchedEffect(state.message) {
+    // 中上方的短 Toast：一条消息只占一小段时间，到时自动收起。
+    // 以前用 Snackbar（底部、长条、会挡住悬浮胶囊），改成顶部短提示更轻、不抢操作。
+    var toastText by remember { mutableStateOf<String?>(null) }
+
+    // ⚠️ 不能用 `LaunchedEffect(state.message)` 做 key：onConsumeMessage() 会把 message
+    // 置 null，key 一变协程就被取消重启，`delay(...)` 之后的 `toastText = null` 永远执行不到，
+    // 于是 toast 显示出来就再也不消失（踩过）。改成用 state.message 值本身做 key：
+    // 只有真的来了一条新消息才重启协程；置 null 不影响这条已启动协程跑完 delay。
+    LaunchedEffect(state.message?.let { it }) {
         val message = state.message ?: return@LaunchedEffect
-        snackbarHostState.showSnackbar(message)
+        toastText = message
         onConsumeMessage()
+        delay(3000)
+        toastText = null
     }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
-        snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { innerPadding ->
         Box(
             Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
         ) {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                // 底部预留操作条的高度，否则最后一个分区会被压住
-                contentPadding = PaddingValues(bottom = 132.dp),
-            ) {
-                item { HeroHeader(runtimeState = runtimeState) }
+            Crossfade(
+                targetState = destination,
+                label = "settingsDestination",
+            ) { dest ->
+                when (dest) {
+                    Destination.ROOT -> RootPage(
+                        state = state,
+                        runtimeState = runtimeState,
+                        listState = rootListState,
+                        hasCalendar = hasCalendar,
+                        hasLocation = hasLocation,
+                        hasNotificationAccess = hasNotificationAccess,
+                        onChange = onChange,
+                        onPlayBriefNow = onPlayBriefNow,
+                        onUpdateBriefNow = onUpdateBriefNow,
+                        onStopBrief = onStopBrief,
+                        onNavigate = { destination = it },
+                    )
 
-                // ---- 每天都会碰的三块：外观 / 语音 / 内容 ----
-                item {
-                    AppearanceSection(
-                        index = "01",
-                        accent = state.draft.accent,
+                    Destination.SCHEDULE -> SchedulePage(
                         draft = state.draft,
                         onChange = onChange,
+                        onBack = { destination = Destination.ROOT },
+                        onAddTimeClick = { showAddTimeDialog = true },
+                        onAddAlarmTimeClick = { showAddAlarmTimeDialog = true },
                     )
-                }
 
-                item {
-                    TtsSection(
-                        index = "02",
-                        tts = state.draft.tts,
-                        onChange = onChange,
-                        draft = state.draft,
-                        onPreviewSpeech = onPreviewSpeech,
-                    )
-                }
+                    Destination.TTS -> DetailPage(
+                        onBack = { destination = Destination.ROOT },
+                    ) {
+                        TtsSection(
+                            index = "03",
+                            tts = state.draft.tts,
+                            draft = state.draft,
+                            onChange = onChange,
+                            onPreviewSpeech = onPreviewSpeech,
+                        )
+                    }
 
-                item { BriefSection(index = "03", draft = state.draft, onChange = onChange) }
-
-                // ---- 装完就不用再动的两块，收进可折叠的「高级设置」 ----
-                item {
-                    AdvancedHeader(
-                        expanded = advancedExpanded,
-                        onToggle = { advancedExpanded = !advancedExpanded },
-                    )
-                }
-
-                if (advancedExpanded) {
-                    item {
-                        LlmSection(
+                    Destination.APPEARANCE -> DetailPage(
+                        onBack = { destination = Destination.ROOT },
+                    ) {
+                        AppearanceSection(
                             index = "04",
+                            accent = state.draft.accent,
+                            draft = state.draft,
+                            onChange = onChange,
+                        )
+                    }
+
+                    Destination.LLM -> DetailPage(
+                        onBack = { destination = Destination.ROOT },
+                    ) {
+                        LlmSection(
+                            index = "05",
                             draft = state.draft,
                             onChange = onChange,
                             probing = state.probing,
                             probeResult = state.probeResult,
                             probeOk = state.probeOk,
                             onProbe = onProbeLlm,
+                            onAddProfile = onAddLlmProfile,
+                            onRemoveProfile = onRemoveLlmProfile,
+                            onMoveToFront = onMoveLlmProfileToFront,
+                            onSelectProfile = onSelectLlmProfile,
+                            onShowLog = { showLogDialog = true },
                         )
                     }
 
-                    item {
+                    Destination.RSS -> DetailPage(
+                        onBack = { destination = Destination.ROOT },
+                    ) {
                         RssSection(
-                            index = "05",
+                            index = "06",
                             rss = state.draft.rss,
+                            catalog = RSS_CATALOG_GROUPS,
                             onToggleFeed = onToggleFeed,
                             onRemoveFeed = onRemoveFeed,
+                            onTogglePresetFeed = onTogglePresetFeed,
                             onAddFeedClick = { showAddFeedDialog = true },
                         )
                     }
-                }
 
-                // ---- 末尾：权限与诊断合并成一块"系统信息" ----
-                item {
-                    SystemSection(
-                        index = "06",
-                        runtimeState = runtimeState,
-                        hasCalendar = hasCalendar,
-                        hasLocation = hasLocation,
-                        hasNotificationAccess = hasNotificationAccess,
-                        onPlayBriefNow = onPlayBriefNow,
-                        onStopBrief = onStopBrief,
-                        onRequestCalendar = {
-                            calendarPermissionLauncher.launch(android.Manifest.permission.READ_CALENDAR)
-                        },
-                        onRequestLocation = {
-                            locationPermissionLauncher.launch(
-                                android.Manifest.permission.ACCESS_COARSE_LOCATION,
-                            )
-                        },
-                        onOpenNotificationSettings = { context.openNotificationListenerSettings() },
-                        onOpenAppSettings = { context.openAppDetailsSettings() },
-                    )
+                    Destination.PERMISSION -> DetailPage(
+                        onBack = { destination = Destination.ROOT },
+                    ) {
+                        SystemSection(
+                            index = "07",
+                            hasCalendar = hasCalendar,
+                            hasLocation = hasLocation,
+                            hasNotificationAccess = hasNotificationAccess,
+                            onRequestCalendar = {
+                                calendarPermissionLauncher.launch(
+                                    android.Manifest.permission.READ_CALENDAR,
+                                )
+                            },
+                            onRequestLocation = {
+                                locationPermissionLauncher.launch(
+                                    android.Manifest.permission.ACCESS_COARSE_LOCATION,
+                                )
+                            },
+                            onOpenNotificationSettings = {
+                                context.openNotificationListenerSettings()
+                            },
+                            onOpenAppSettings = { context.openAppDetailsSettings() },
+                        )
+                    }
                 }
             }
 
-            ActionBar(
+            FloatingActions(
                 saving = state.saving,
                 saveEnabled = state.loaded,
                 onSave = onSave,
                 onReset = { showResetConfirm = true },
-                modifier = Modifier.align(Alignment.BottomCenter),
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 18.dp, bottom = 18.dp),
             )
+
+            // 中上方短 Toast：悬浮在内容之上、不占版面，1.8 秒自动收起。
+            // 顶部从状态栏下面 12dp 起、水平居中。用深色底白字，浅色设置页上也醒目。
+            AnimatedVisibility(
+                visible = toastText != null,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 12.dp),
+                enter = fadeIn() + slideInVertically { -it / 2 },
+                exit = fadeOut() + slideOutVertically { -it / 2 },
+            ) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(percent = 50))
+                        .background(PureBlack.copy(alpha = 0.82f))
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                ) {
+                    Text(
+                        text = toastText.orEmpty(),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = PureWhite,
+                        maxLines = 1,
+                    )
+                }
+            }
         }
     }
 
@@ -300,6 +448,40 @@ fun SettingsScreen(
         )
     }
 
+    if (showAddTimeDialog) {
+        // 解析与去重都交给弹窗自己做：它才知道用户刚输了什么，
+        // 出错时能就地提示并保持打开，而不是关掉弹窗再飘一条 Snackbar。
+        AddTimeDialog(
+            existing = state.draft.brief.updateTimes,
+            onDismiss = { showAddTimeDialog = false },
+            onConfirm = { time ->
+                val brief = state.draft.brief
+                onChange(
+                    state.draft.copy(
+                        brief = brief.copy(updateTimes = (brief.updateTimes + time).sorted()),
+                    ),
+                )
+                showAddTimeDialog = false
+            },
+        )
+    }
+
+    if (showAddAlarmTimeDialog) {
+        AddTimeDialog(
+            existing = state.draft.brief.alarmTimes,
+            onDismiss = { showAddAlarmTimeDialog = false },
+            onConfirm = { time ->
+                val brief = state.draft.brief
+                onChange(
+                    state.draft.copy(
+                        brief = brief.copy(alarmTimes = (brief.alarmTimes + time).sorted()),
+                    ),
+                )
+                showAddAlarmTimeDialog = false
+            },
+        )
+    }
+
     if (showResetConfirm) {
         ResetConfirmDialog(
             onDismiss = { showResetConfirm = false },
@@ -309,6 +491,309 @@ fun SettingsScreen(
             },
         )
     }
+
+    if (showLogDialog) {
+        LlmLogDialog(
+            entries = logEntries,
+            onDismiss = { showLogDialog = false },
+            onClear = onClearLog,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 一级页 / 二级页骨架
+// ---------------------------------------------------------------------------
+
+/**
+ * 一级页。
+ *
+ * 顺序 = 用户动手的频率：动作 → 高频调节 → 五个带摘要的二级页入口。
+ * 大约两屏，滚到底也就两下。
+ */
+@Composable
+private fun RootPage(
+    state: SettingsViewModel.UiState,
+    runtimeState: WidgetRuntimeState,
+    listState: LazyListState,
+    hasCalendar: Boolean,
+    hasLocation: Boolean,
+    hasNotificationAccess: Boolean,
+    onChange: (UserSettings) -> Unit,
+    onPlayBriefNow: () -> Unit,
+    onUpdateBriefNow: () -> Unit,
+    onStopBrief: () -> Unit,
+    onNavigate: (Destination) -> Unit,
+) {
+    val draft = state.draft
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        state = listState,
+        // 底部预留悬浮按钮的高度，否则最后一个分区会被压住。
+        contentPadding = PaddingValues(bottom = 104.dp),
+    ) {
+        item { HeroHeader(runtimeState = runtimeState) }
+
+        // 01 动作 + 两个开关（时刻表在二级页）
+        item {
+            UpdateSection(
+                index = "01",
+                draft = draft,
+                updating = state.updating,
+                playing = runtimeState.state == WidgetState.PLAYING,
+                onChange = onChange,
+                onEditSchedule = { onNavigate(Destination.SCHEDULE) },
+                onPlayBriefNow = onPlayBriefNow,
+                onUpdateBriefNow = onUpdateBriefNow,
+                onStopBrief = onStopBrief,
+            )
+        }
+
+        // 02 简报内容：篇幅 / 前瞻 / 来源都是会来回改的，留在一级
+        item { BriefSection(index = "02", draft = draft, onChange = onChange) }
+
+        item {
+            SettingsEntry(
+                index = "03",
+                title = stringResource(R.string.section_tts),
+                eyebrow = stringResource(R.string.eyebrow_tts),
+                summary = ttsSummary(draft.tts),
+                onClick = { onNavigate(Destination.TTS) },
+            )
+        }
+
+        item {
+            SettingsEntry(
+                index = "04",
+                title = stringResource(R.string.section_appearance),
+                eyebrow = stringResource(R.string.eyebrow_appearance),
+                summary = appearanceSummary(draft.accent),
+                onClick = { onNavigate(Destination.APPEARANCE) },
+            )
+        }
+
+        item {
+            SettingsEntry(
+                index = "05",
+                title = stringResource(R.string.section_llm),
+                eyebrow = stringResource(R.string.eyebrow_llm),
+                summary = llmSummary(draft),
+                onClick = { onNavigate(Destination.LLM) },
+            )
+        }
+
+        item {
+            SettingsEntry(
+                index = "06",
+                title = stringResource(R.string.section_rss),
+                eyebrow = stringResource(R.string.eyebrow_rss),
+                summary = rssSummary(draft.rss),
+                onClick = { onNavigate(Destination.RSS) },
+            )
+        }
+
+        item {
+            SettingsEntry(
+                index = "07",
+                title = stringResource(R.string.section_system),
+                eyebrow = stringResource(R.string.eyebrow_system),
+                summary = permissionSummary(
+                    hasCalendar = hasCalendar,
+                    hasLocation = hasLocation,
+                    hasNotificationAccess = hasNotificationAccess,
+                ),
+                onClick = { onNavigate(Destination.PERMISSION) },
+            )
+        }
+    }
+}
+
+/**
+ * 二级页入口：**标题 + 当前值摘要 + 箭头**。
+ *
+ * 摘要这一行是整个混合式方案的支点。抽屉式菜单之所以让人不踏实，是因为
+ * 把设置藏起来之后你就看不见自己配了什么 —— 有了摘要，一级页反而比全平铺时
+ * 更像一张"我现在是什么配置"的总览表，进二级只是"要改的时候才去"。
+ */
+@Composable
+private fun SettingsEntry(
+    index: String,
+    title: String,
+    eyebrow: String,
+    summary: String,
+    onClick: () -> Unit,
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+    ) {
+        Hairline()
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp),
+            contentAlignment = Alignment.TopCenter,
+        ) {
+            Row(
+                modifier = Modifier
+                    .widthIn(max = ContentMaxWidth)
+                    .fillMaxWidth()
+                    .padding(vertical = 18.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = index,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = title,
+                            style = MaterialTheme.typography.titleSmall,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            text = eyebrow.uppercase(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = summary,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    text = "›",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/** 二级页外壳：顶部返回条 + 可滚动内容。返回键由外层 [BackHandler] 统一接。 */
+@Composable
+private fun DetailPage(
+    onBack: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    Column(Modifier.fillMaxSize()) {
+        BackBar(onBack = onBack)
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 104.dp),
+        ) {
+            item { content() }
+        }
+    }
+}
+
+@Composable
+private fun BackBar(onBack: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onBack),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp),
+            contentAlignment = Alignment.TopCenter,
+        ) {
+            Row(
+                modifier = Modifier
+                    .widthIn(max = ContentMaxWidth)
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "‹",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = stringResource(R.string.action_back_to_settings),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Hairline()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 摘要：二级页入口下面那一行"当前是什么"
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun ttsSummary(tts: TtsConfig): String {
+    val provider = stringResource(
+        when (tts.provider) {
+            TtsProvider.SYSTEM -> R.string.tts_system
+            TtsProvider.DOUBAO -> R.string.tts_doubao
+        },
+    )
+    val bgm = stringResource(
+        if (tts.bgmEnabled) R.string.summary_bgm_on else R.string.summary_bgm_off,
+    )
+    return "$provider · $bgm"
+}
+
+@Composable
+private fun appearanceSummary(accent: AccentColor): String {
+    val mode = stringResource(
+        if (accent.carousel) R.string.accent_carousel else R.string.accent_fixed,
+    )
+    return stringResource(R.string.summary_hue, mode, accent.hue.toInt())
+}
+
+/** 没填 Key 时说"未配置"，比说"已配 1 份"有用 —— 那一份是空的。 */
+@Composable
+private fun llmSummary(draft: UserSettings): String {
+    val count = draft.llm.profiles.size
+    return if (draft.llm.primary.apiKey.isBlank()) {
+        stringResource(R.string.summary_llm_unset)
+    } else {
+        stringResource(R.string.summary_profiles, count)
+    }
+}
+
+@Composable
+private fun rssSummary(rss: RssConfig): String =
+    stringResource(R.string.summary_feeds, rss.feeds.count { it.enabled })
+
+@Composable
+private fun permissionSummary(
+    hasCalendar: Boolean,
+    hasLocation: Boolean,
+    hasNotificationAccess: Boolean,
+): String {
+    val granted = listOf(hasCalendar, hasLocation, hasNotificationAccess).count { it }
+    return stringResource(R.string.summary_permission, granted, 3)
+}
+
+/** 时刻表摘要：直接把时刻列出来，省掉一次进二级页。 */
+@Composable
+private fun timesSummary(times: List<LocalTime>): String {
+    if (times.isEmpty()) return stringResource(R.string.summary_times_none)
+    return stringResource(
+        R.string.summary_times,
+        times.size,
+        times.joinToString(" ") { BriefSchedule.format(it) },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -399,68 +884,8 @@ private fun HeroHeader(runtimeState: WidgetRuntimeState) {
 // 高级设置（可折叠）
 // ---------------------------------------------------------------------------
 
-/**
- * 「高级设置」折叠条。
- *
- * 存在的意义纯粹是**信息分层**：大模型接口和订阅源属于"装完就不再动"的配置，
- * 但它们字段多、很长，平铺在中间会把每天要调的语音、内容参数挤到下面去。
- * 收起来之后，默认视野里只剩三块高频设置。
- *
- * 用一条和分区头长得一样的行来表达，保持"编号 + 标题 + 眉标"的读板节奏，
- * 但整体可点 —— 因为这里点哪里都是"展开"，不存在别的手势歧义。
- */
-@Composable
-private fun AdvancedHeader(expanded: Boolean, onToggle: () -> Unit) {
-    Column(Modifier.fillMaxWidth()) {
-        Hairline()
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp),
-            contentAlignment = Alignment.TopCenter,
-        ) {
-            Column(
-                modifier = Modifier
-                    .widthIn(max = ContentMaxWidth)
-                    .fillMaxWidth()
-                    .clickable(onClick = onToggle)
-                    .padding(vertical = 18.dp),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = stringResource(R.string.section_advanced_range),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        text = stringResource(R.string.section_advanced),
-                        style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        text = stringResource(
-                            if (expanded) R.string.action_collapse else R.string.action_expand,
-                        ),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (!expanded) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = stringResource(R.string.section_advanced_desc),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
-// 01 小组件外观（预览 + 配色 + 轮播）
+// 04 小组件外观（预览 + 配色 + 轮播）
 // ---------------------------------------------------------------------------
 
 /**
@@ -624,6 +1049,11 @@ private fun AccentModeRow(
  */
 @Composable
 private fun HueSliderRow(hue: Float, onHueChange: (Float) -> Unit) {
+    // 与 NothingSlider 同一个坑：`pointerInput(Unit)` 的手势块不随重组合重启，
+    // 里面捕获的 onHueChange 会一直用**第一次组合**时的 draft —— 拖动色相时
+    // 顺手把鲜艳度打回原值（用户的原话是"动了谁另一个就会重置"）。
+    val currentOnHueChange by rememberUpdatedState(onHueChange)
+
     Column(Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.Bottom) {
             Text(
@@ -674,7 +1104,7 @@ private fun HueSliderRow(hue: Float, onHueChange: (Float) -> Unit) {
                             }
 
                             if (owned) {
-                                onHueChange(hueAt(x))
+                                currentOnHueChange(hueAt(x))
                                 if (change.pressed) change.consume()
                             }
 
@@ -683,7 +1113,7 @@ private fun HueSliderRow(hue: Float, onHueChange: (Float) -> Unit) {
                                     change.consume()
                                 } else if (!abandoned) {
                                     // 轻点：点哪儿选哪儿
-                                    onHueChange(hueAt(x))
+                                    currentOnHueChange(hueAt(x))
                                     change.consume()
                                 }
                                 break
@@ -718,131 +1148,43 @@ private fun hsvColor(hue: Float, saturation: Float, value: Float): Color =
     Color(android.graphics.Color.HSVToColor(floatArrayOf(hue, saturation, value)))
 
 // ---------------------------------------------------------------------------
-// 06 权限与诊断（合并）
+// 07 权限
 // ---------------------------------------------------------------------------
 
 /**
- * 「权限与诊断」。
+ * 「权限」。
  *
- * 合并的理由：这两块单独看都不是"配置"，而是**同一类东西**——
- * "这个应用现在到底能不能干活"。用户来这里只有一个问题：
- * 点不动 / 不出声，是权限没给，还是接口挂了。
- * 把"现在什么状态"和两个授权入口放在一起，一眼就能把因果连起来；
- * 分在两处反而要来回对照。
+ * 这里原来是「权限与诊断」，下面还挂着半屏"运行状态"：状态灯、上次生成时间、
+ * 上次出错的原因原文。那半屏整块撤了，理由两条：
  *
- * 但"能不能干活"只留**结论**，不留**过程**：状态灯 + 上次生成时间 + 三条权限，
- * 就这么几行。中间那些实现层读数（服务连接标志、点阵灰彩、原始异常）都已经撤掉，
- * 见下面 [TechRow] 处的注释。
+ * 1. **那些读数是给我们排错用的，不是给用户办事的**。用户来这一页只有一件事：
+ *    日历 / 位置 / 通知使用权给没给。状态灯和桌面点阵的颜色说的是同一件事，
+ *    看桌面更直接；"上次生成"是个时间戳，用户看了也没有下一步动作。
+ * 2. **出问题不该等用户翻设置页才发现**。那条链路几乎没有可视反馈，失败时
+ *    用户看到的只是点阵换了个颜色，而唯一的线索被压在这一页最底下 ——
+ *    真机上真发生过（模型回 429 额度用尽，反复点了半天也没找到那句话）。
+ *    现在失败当场 Toast（见 `toastIssue`），原因原文仍旧落盘在
+ *    `RuntimeKeys.LAST_ERROR` 里，要查随时能查。
  *
- * 位置放在最后：装好之后的日常使用中几乎不会翻到这里。
+ * 于是这一区剩下的全是"能不能干活"的三个开关。位置仍在最后：
+ * 装好之后的日常使用中几乎不会翻到这里。
  */
 @Composable
 private fun SystemSection(
     index: String,
-    runtimeState: WidgetRuntimeState,
     hasCalendar: Boolean,
     hasLocation: Boolean,
     hasNotificationAccess: Boolean,
-    onPlayBriefNow: () -> Unit,
-    onStopBrief: () -> Unit,
     onRequestCalendar: () -> Unit,
     onRequestLocation: () -> Unit,
     onOpenNotificationSettings: () -> Unit,
     onOpenAppSettings: () -> Unit,
 ) {
-    val live = runtimeState.state == WidgetState.PLAYING ||
-        runtimeState.state == WidgetState.GENERATING
-
-    val timeText = remember(runtimeState.lastBriefAtEpochSeconds) {
-        if (runtimeState.lastBriefAtEpochSeconds <= 0L) {
-            EMPTY_VALUE
-        } else {
-            DateTimeFormatter.ofPattern("M月d日 HH:mm")
-                .withZone(ZoneId.systemDefault())
-                .format(Instant.ofEpochSecond(runtimeState.lastBriefAtEpochSeconds))
-        }
-    }
-
     NothingSection(
         index = index,
         title = stringResource(R.string.section_system),
         eyebrow = stringResource(R.string.eyebrow_system),
     ) {
-        BlockLabel(text = stringResource(R.string.block_status))
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            StatusDot(active = live)
-            Spacer(Modifier.width(11.dp))
-            Text(
-                text = runtimeState.state.label(),
-                style = MaterialTheme.typography.titleSmall,
-                color = if (live) MaterialTheme.colorScheme.tertiary
-                else MaterialTheme.colorScheme.onSurface,
-            )
-        }
-
-        // 这里只留一行"上次生成"。
-        //
-        // 之前这段还摊着三条读数：通知读取服务的连接状态、点阵当前是彩是灰、
-        // 以及"上次出错：<原始异常>"。它们对开发很有用，但对用户全是噪音 ——
-        // 服务连没连，看下面那条"通知使用权 已授权"就够了，同一件事说两遍
-        // 只会让人怀疑哪条才算数；点阵灰彩是"有没有新内容"的结果，用户在桌面上
-        // 一眼就能看见，不需要在设置页里再读一次；原始异常更糟，它不但看不懂，
-        // 还会让人以为应用坏了。诊断信息一律走日志。
-        TechRow(
-            label = stringResource(R.string.tech_brief_time),
-            value = timeText,
-        )
-
-        // 出错时也只说"怎么办"，不贴异常本身
-        if (runtimeState.lastError.isNotBlank()) {
-            Text(
-                text = stringResource(R.string.status_error_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
-
-        if (runtimeState.lastBriefText.isBlank()) {
-            Text(
-                text = stringResource(R.string.status_empty),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    text = stringResource(R.string.status_last_brief),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    text = runtimeState.lastBriefText,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-        }
-
-        // 不走桌面也能跑一遍完整链路，用来验证权限与语音是否真的通了
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            NothingButton(
-                text = stringResource(R.string.action_play_brief_now),
-                onClick = onPlayBriefNow,
-                enabled = runtimeState.state != WidgetState.GENERATING,
-                modifier = Modifier.weight(1f),
-            )
-            if (runtimeState.state == WidgetState.PLAYING) {
-                NothingButton(
-                    text = stringResource(R.string.action_stop_brief),
-                    onClick = onStopBrief,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-        }
-
-        Hairline(color = MaterialTheme.colorScheme.outlineVariant)
-
-        BlockLabel(text = stringResource(R.string.block_permission))
 
         PermissionRow(
             title = stringResource(R.string.permission_calendar),
@@ -882,10 +1224,8 @@ private fun WidgetState.label(): String = stringResource(
     },
 )
 
-private const val EMPTY_VALUE = "—"
-
 // ---------------------------------------------------------------------------
-// 04 大模型接口
+// 05 大模型接口
 // ---------------------------------------------------------------------------
 
 @Composable
@@ -897,8 +1237,13 @@ private fun LlmSection(
     probeResult: String?,
     probeOk: Boolean,
     onProbe: () -> Unit,
+    onAddProfile: () -> Unit,
+    onRemoveProfile: (String) -> Unit,
+    onMoveToFront: (String) -> Unit,
+    onSelectProfile: (String) -> Unit,
+    onShowLog: () -> Unit,
 ) {
-    val llm = draft.llm
+    val profiles = draft.llm
 
     NothingSection(
         index = index,
@@ -914,39 +1259,41 @@ private fun LlmSection(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        NothingField(
-            value = llm.baseUrl,
-            onValueChange = { onChange(draft.copy(llm = llm.copy(baseUrl = it))) },
-            label = stringResource(R.string.label_base_url),
-            keyboardType = KeyboardType.Uri,
+        // 多份配置的说明：列表顺序 = 失败自动切换的顺序，第一份是首选。
+        Text(
+            text = stringResource(R.string.llm_failover_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        SecretField(
-            value = llm.apiKey,
-            onValueChange = { onChange(draft.copy(llm = llm.copy(apiKey = it))) },
-            label = stringResource(R.string.label_api_key),
-            hint = stringResource(R.string.hint_api_key),
-        )
+        // 每一份：一个可展开的条目。展开显示该份的字段，收起只留一行标题 + 操作。
+        profiles.profiles.forEachIndexed { position, config ->
+            LlmProfileItem(
+                config = config,
+                isPrimary = position == 0,
+                isActive = config.id == profiles.activeId,
+                isExpanded = config.id == profiles.activeId,
+                canRemove = profiles.profiles.size > 1,
+                onToggle = { onSelectProfile(config.id) },
+                onMoveToFront = { onMoveToFront(config.id) },
+                onRemove = { onRemoveProfile(config.id) },
+                onEdit = { updated ->
+                    val list = profiles.profiles.map { if (it.id == config.id) updated else it }
+                    onChange(draft.copy(llm = profiles.copy(profiles = list)))
+                },
+            )
+        }
 
-        NothingField(
-            value = llm.model,
-            onValueChange = { onChange(draft.copy(llm = llm.copy(model = it))) },
-            label = stringResource(R.string.label_model),
+        // 新增一份
+        NothingButton(
+            text = stringResource(R.string.action_add_profile),
+            onClick = onAddProfile,
+            modifier = Modifier.fillMaxWidth(),
         )
-
-        // 到这里就没有别的了。
-        //
-        // 之前这块下面还挂着三个滑杆/输入框：发散度、接口超时、系统提示词。
-        // 它们是**调优参数**，不是**必填参数** —— 界面上多一个滑杆，用户就得先
-        // 判断"这个我该不该动"，而这三个的正确答案对所有人都是"不用动"：
-        // 发散度 0.6 是端到端试出来的；超时 90 秒是按带思维链的模型留的余量；
-        // 系统提示词更是一段写给模型的规范（禁 Markdown、固定播报顺序、字数为
-        // 运行时注入），改错一个字，播报就变成念符号或者不报行程。
-        // 所以它们退回 [Defaults]，只由代码维护；这里只留三件"只有用户知道"的事：
-        // 接口在哪（Base URL）、钥匙是什么（API Key）、用哪个型号（模型名称）。
 
         // 大模型接口最常见的失败是「网络到不了」，它的表现是"点了半天没反应然后超时"，
         // 极难自己定位。所以这里给一个一键自检，把地址错 / 被墙 / Key 无效 / 模型名错分开说清楚。
+        // 自检针对「首选」那一份（列表第一份）。
         NothingButton(
             text = stringResource(if (probing) R.string.action_probing else R.string.action_probe),
             onClick = onProbe,
@@ -965,7 +1312,251 @@ private fun LlmSection(
                 },
             )
         }
+
+        // 接口日志：点开看"最近每次到底谁成功了、谁失败了、为什么"。排查额度 / 断网时最有用。
+        NothingButton(
+            text = stringResource(R.string.action_view_log),
+            onClick = onShowLog,
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
+}
+
+/**
+ * 一份 AI 配置的条目。
+ *
+ * 展开态 = 这份的 Base URL / Key / 模型名三个输入框 + 置顶/删除；收起态 = 一行标题。
+ * 用 `isExpanded = (id == activeId)` 驱动：点标题即切换「当前编辑」的那一份，
+ * 展开另一份时这份自动收起（同一时刻只展开一份，避免列表被多份输入框撑爆）。
+ */
+@Composable
+private fun LlmProfileItem(
+    config: LlmConfig,
+    isPrimary: Boolean,
+    isActive: Boolean,
+    isExpanded: Boolean,
+    canRemove: Boolean,
+    onToggle: () -> Unit,
+    onMoveToFront: () -> Unit,
+    onRemove: () -> Unit,
+    onEdit: (LlmConfig) -> Unit,
+) {
+    Column {
+        // 标题行：显示名 + 「主用」标签。点它切换展开/收起（即切换当前编辑份）。
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onToggle)
+                .padding(vertical = 10.dp),
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = config.displayName(),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (isActive) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (isPrimary) {
+                    Text(
+                        text = stringResource(R.string.llm_primary_badge),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
+            }
+            if (isExpanded) {
+                Text(
+                    text = stringResource(R.string.action_collapse),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        // 展开态：字段 + 操作
+        if (isExpanded) {
+            NothingField(
+                value = config.name,
+                onValueChange = { onEdit(config.copy(name = it)) },
+                label = stringResource(R.string.label_profile_name),
+            )
+            NothingField(
+                value = config.baseUrl,
+                onValueChange = { onEdit(config.copy(baseUrl = it)) },
+                label = stringResource(R.string.label_base_url),
+                keyboardType = KeyboardType.Uri,
+            )
+            SecretField(
+                value = config.apiKey,
+                onValueChange = { onEdit(config.copy(apiKey = it)) },
+                label = stringResource(R.string.label_api_key),
+                hint = stringResource(R.string.hint_api_key),
+            )
+            NothingField(
+                value = config.model,
+                onValueChange = { onEdit(config.copy(model = it)) },
+                label = stringResource(R.string.label_model),
+            )
+
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (!isPrimary) {
+                    NothingButton(
+                        text = stringResource(R.string.action_make_primary),
+                        onClick = onMoveToFront,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                if (canRemove) {
+                    NothingButton(
+                        text = stringResource(R.string.action_delete),
+                        onClick = onRemove,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+
+            // 与旧版同一段说明：发散度/超时/系统提示词三个调优参数退回 Defaults，
+            // 这里只留三件"只有用户知道"的事。
+            Text(
+                text = stringResource(R.string.llm_tuning_hidden_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * 接口调用日志弹窗。
+ *
+ * 回答「最近每次到底谁成功了」：每条 = 一次完整生成，里面按尝试顺序列出各份配置的
+ * 成败（成功打绿、失败打红并附原因）。绿色的最后一条就是那次"谁接住了"；一条绿都没有
+ * 就是全失败、退了本地简报。来源标签（点组件 / 立即播报 / 刷新 / 定时）帮用户定位
+ * "是哪个入口出的问题"。
+ */
+@Composable
+private fun LlmLogDialog(
+    entries: List<LlmCallLogEntry>,
+    onDismiss: () -> Unit,
+    onClear: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = stringResource(R.string.log_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.weight(1f),
+                )
+                if (entries.isNotEmpty()) {
+                    Text(
+                        text = stringResource(R.string.log_clear),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier
+                            .clickable(onClick = onClear)
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                }
+            }
+        },
+        text = {
+            if (entries.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.log_empty),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 360.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    items(entries.size) { index ->
+                        val entry = entries[index]
+                        Column {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = sourceLabel(entry.source),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Text(
+                                    text = timeLabel(entry.atEpochSeconds),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            entry.records.forEach { record ->
+                                Row(
+                                    verticalAlignment = Alignment.Top,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Text(
+                                        text = if (record.ok) "✓" else "✕",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (record.ok) {
+                                            MaterialTheme.colorScheme.tertiary
+                                        } else {
+                                            MaterialTheme.colorScheme.error
+                                        },
+                                    )
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            text = record.name,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                        )
+                                        if (!record.ok && record.reason.isNotBlank()) {
+                                            Text(
+                                                text = record.reason,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.error,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (index != entries.lastIndex) {
+                            Hairline(color = MaterialTheme.colorScheme.outlineVariant)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            NothingButton(
+                text = stringResource(R.string.action_close),
+                onClick = onDismiss,
+            )
+        },
+    )
+}
+
+@Composable
+private fun sourceLabel(source: String): String = stringResource(
+    when (source) {
+        "widget" -> R.string.log_source_widget
+        "manual" -> R.string.log_source_manual
+        "refresh" -> R.string.log_source_refresh
+        "auto" -> R.string.log_source_auto
+        "alarm" -> R.string.log_source_alarm
+        else -> R.string.log_source_other
+    },
+)
+
+private fun timeLabel(epochSeconds: Long): String {
+    if (epochSeconds <= 0L) return "--:--"
+    val local = java.time.Instant.ofEpochSecond(epochSeconds)
+        .atZone(java.time.ZoneId.systemDefault())
+    return java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm").format(local)
 }
 
 /** 密钥输入框：默认打码，可切换明文，方便用户核对粘贴结果。 */
@@ -1003,15 +1594,17 @@ private fun SecretField(
 }
 
 // ---------------------------------------------------------------------------
-// 05 新闻订阅源
+// 06 新闻订阅源
 // ---------------------------------------------------------------------------
 
 @Composable
 private fun RssSection(
     index: String,
     rss: RssConfig,
+    catalog: List<RssCatalogGroup>,
     onToggleFeed: (String, Boolean) -> Unit,
     onRemoveFeed: (String) -> Unit,
+    onTogglePresetFeed: (RssFeed, Boolean) -> Unit,
     onAddFeedClick: () -> Unit,
 ) {
     NothingSection(
@@ -1020,19 +1613,81 @@ private fun RssSection(
         eyebrow = stringResource(R.string.eyebrow_rss),
         desc = stringResource(R.string.section_rss_desc),
     ) {
-        if (rss.feeds.isEmpty()) {
+        // 目录近百条，靠滑不容易定位 —— 搜索框是这个页面的主要入口，
+        // 分组只是没有关键词时的浏览方式（分组与收录标准见 `RssCatalog.kt`）。
+        var query by rememberSaveable { mutableStateOf("") }
+        NothingField(
+            value = query,
+            onValueChange = { query = it },
+            label = stringResource(R.string.label_rss_search),
+        )
+
+        // 推荐源目录：按分类分组，勾选即添加、取消即移除，不用手输地址。
+        // 勾选状态 = 用户 feeds 里有没有这个源（按 id 或 url 任一匹配，兼容老用户的随机 id）。
+        val filtered = remember(query, catalog) {
+            val keyword = query.trim()
+            if (keyword.isEmpty()) {
+                catalog
+            } else {
+                catalog.mapNotNull { group ->
+                    val hits = group.feeds.filter {
+                        it.name.contains(keyword, ignoreCase = true)
+                    }
+                    if (hits.isEmpty()) null else RssCatalogGroup(group.title, hits)
+                }
+            }
+        }
+
+        if (filtered.isEmpty()) {
             Text(
-                text = stringResource(R.string.msg_no_enabled_feed),
+                text = stringResource(R.string.msg_rss_no_match),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
 
-        rss.feeds.forEach { feed ->
-            FeedRow(
-                feed = feed,
-                onToggle = { enabled -> onToggleFeed(feed.id, enabled) },
-                onRemove = { onRemoveFeed(feed.id) },
+        BlockLabel(text = stringResource(R.string.label_rss_catalog))
+        filtered.forEach { group ->
+            Text(
+                text = group.title,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 10.dp),
+            )
+            group.feeds.forEach { preset ->
+                val checked = rss.feeds.any {
+                    it.id == preset.id || it.url.equals(preset.url, ignoreCase = true)
+                }
+                PresetFeedRow(
+                    name = preset.name,
+                    url = preset.url,
+                    checked = checked,
+                    onToggle = { onTogglePresetFeed(preset, it) },
+                )
+            }
+        }
+
+        Hairline(color = MaterialTheme.colorScheme.outlineVariant)
+
+        // 用户自己添加的源（不在目录里的那些）：可启用 / 删除。
+        val allCatalogFeeds = catalog.flatMap { it.feeds }
+        val customFeeds = rss.feeds.filter { feed ->
+            allCatalogFeeds.none { it.id == feed.id || it.url.equals(feed.url, ignoreCase = true) }
+        }
+        if (customFeeds.isNotEmpty()) {
+            BlockLabel(text = stringResource(R.string.label_rss_custom))
+            customFeeds.forEach { feed ->
+                FeedRow(
+                    feed = feed,
+                    onToggle = { enabled -> onToggleFeed(feed.id, enabled) },
+                    onRemove = { onRemoveFeed(feed.id) },
+                )
+            }
+        } else if (rss.feeds.isEmpty()) {
+            Text(
+                text = stringResource(R.string.msg_no_enabled_feed),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
 
@@ -1041,6 +1696,36 @@ private fun RssSection(
             onClick = onAddFeedClick,
             modifier = Modifier.fillMaxWidth(),
         )
+    }
+}
+
+/** 推荐源目录里的一行：名字 + 地址 + 勾选开关（没有删除键，取消勾选即移除）。 */
+@Composable
+private fun PresetFeedRow(
+    name: String,
+    url: String,
+    checked: Boolean,
+    onToggle: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = name,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                text = url,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        NothingSwitch(checked = checked, onCheckedChange = onToggle)
     }
 }
 
@@ -1174,7 +1859,7 @@ private fun ResetConfirmDialog(
 }
 
 // ---------------------------------------------------------------------------
-// 06 语音播报
+// 03 语音播报
 // ---------------------------------------------------------------------------
 
 @Composable
@@ -1255,24 +1940,33 @@ private fun TtsSection(
             )
         }
 
-        NothingSliderRow(
-            label = stringResource(R.string.label_speech_rate),
-            valueText = String.format("%.1fX", tts.speechRate),
-            value = tts.speechRate,
-            valueRange = TtsPreviewPlayer.MIN_RATE..TtsPreviewPlayer.MAX_RATE,
-            steps = 5,
-            onValueChange = { onChange(draft.copy(tts = tts.copy(speechRate = it))) },
-        )
+        Hairline(color = MaterialTheme.colorScheme.outlineVariant)
 
-        NothingSliderRow(
-            label = stringResource(R.string.label_pitch),
-            valueText = String.format("%.1f", tts.pitch),
-            value = tts.pitch,
-            valueRange = TtsPreviewPlayer.MIN_PITCH..TtsPreviewPlayer.MAX_PITCH,
-            steps = 5,
-            onValueChange = { onChange(draft.copy(tts = tts.copy(pitch = it))) },
-        )
+        // ---- 背景音乐：等待那几秒垫一段，开口后压到垫底 ----
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.tts_bgm_enabled),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    text = stringResource(R.string.tts_bgm_enabled_desc),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            NothingSwitch(
+                checked = tts.bgmEnabled,
+                onCheckedChange = { onChange(draft.copy(tts = tts.copy(bgmEnabled = it))) },
+            )
+        }
 
+        // 语速 / 音调两个滑块已移除（见 TtsConfig 的注释）：“试听一句”留着 ——
+        // 它的用处是当场验证 Key 与音色配得对不对，跟语速无关。
         NothingButton(
             text = stringResource(R.string.action_preview),
             onClick = onPreviewSpeech,
@@ -1282,7 +1976,7 @@ private fun TtsSection(
 }
 
 // ---------------------------------------------------------------------------
-// 07 简报内容
+// 02 简报内容
 // ---------------------------------------------------------------------------
 
 @Composable
@@ -1300,6 +1994,33 @@ private fun BriefSection(
         eyebrow = stringResource(R.string.eyebrow_brief),
         desc = stringResource(R.string.section_brief_desc),
     ) {
+        // 篇幅：三档，按"念多久"选。
+        //
+        // 这里原来是并排两个滑杆（正文字数下限 / 上限），被问了一句"为啥要限制什么正文"。
+        // 那两个数字确实答不上来：250 字是多长？下限又是干什么用的？而这段字要**念出来**，
+        // 有意义的单位是时间。顺带一个收益：上下限成对写在枚举里之后，
+        // "下限大于上限"这种非法状态在类型层面就不存在了（原来得在保存时校验一次）。
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(
+                text = stringResource(R.string.label_length),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            NothingSegmented(
+                options = BriefLength.values().map { stringResource(it.labelRes()) },
+                selectedIndex = BriefLength.values().indexOf(brief.length),
+                onSelect = { index ->
+                    val picked = BriefLength.values()[index]
+                    onChange(draft.copy(brief = brief.copy(length = picked)))
+                },
+            )
+        }
+        Text(
+            text = stringResource(R.string.brief_length_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
         NothingSliderRow(
             label = stringResource(R.string.label_lookahead),
             valueText = "${ingest.lookaheadHours} H",
@@ -1308,28 +2029,6 @@ private fun BriefSection(
             steps = 16,
             onValueChange = {
                 onChange(draft.copy(ingest = ingest.copy(lookaheadHours = it.toInt())))
-            },
-        )
-
-        NothingSliderRow(
-            label = stringResource(R.string.label_length),
-            valueText = "${brief.minChars} 字起",
-            value = brief.minChars.toFloat(),
-            valueRange = 60f..300f,
-            steps = 11,
-            onValueChange = {
-                onChange(draft.copy(brief = brief.copy(minChars = it.toInt())))
-            },
-        )
-
-        NothingSliderRow(
-            label = stringResource(R.string.label_length_max),
-            valueText = "${brief.maxChars} 字",
-            value = brief.maxChars.toFloat(),
-            valueRange = 120f..500f,
-            steps = 18,
-            onValueChange = {
-                onChange(draft.copy(brief = brief.copy(maxChars = it.toInt())))
             },
         )
 
@@ -1374,6 +2073,12 @@ private fun BriefSection(
     }
 }
 
+private fun BriefLength.labelRes(): Int = when (this) {
+    BriefLength.SHORT -> R.string.brief_length_short
+    BriefLength.STANDARD -> R.string.brief_length_standard
+    BriefLength.LONG -> R.string.brief_length_long
+}
+
 private fun BriefSource.labelRes(): Int = when (this) {
     BriefSource.CALENDAR -> R.string.source_calendar
     BriefSource.TODO -> R.string.source_todo
@@ -1381,6 +2086,346 @@ private fun BriefSource.labelRes(): Int = when (this) {
     BriefSource.PACKAGE -> R.string.source_package
     BriefSource.WEATHER -> R.string.source_weather
     BriefSource.NEWS -> R.string.source_news
+}
+
+// ---------------------------------------------------------------------------
+// 01 播报与更新
+// ---------------------------------------------------------------------------
+
+/**
+ * 「现在就听 / 现在就刷 / 什么时候自动刷」。
+ *
+ * ## 为什么手动动作在最前、自动排期反而垫后
+ *
+ * 这块的主体曾经是「自动更新」的时刻表（默认 10:00 / 14:00 / 19:00，可改），
+ * 手动播报只是附在末尾的一个按钮。实际用起来正好相反：时刻表是**配一次就再不动**的，
+ * 而"我现在就想听""我现在想要一份新的"是天天要碰的 —— 所以现在手动在上、自动在下，
+ * 分区名也从「自动更新」改成了「播报与更新」。
+ *
+ * ## 两个按钮为什么不是一个（上一轮在这里删过头了）
+ *
+ * 见 `SettingsViewModel.updateBriefNow` 的注释：按**生产 / 消费**划开，两者永不重叠 ——
+ * 「立即播报」消费现成的那份，「刷新内容」去要一份新的、但不出声。
+ * 上一轮我的划分是"用不用缓存"，用户没法从字面上分辨，于是我把其中一个删了，
+ * 顺手把"我现在就想要一份新的"这个需求也删掉了。
+ *
+ * 时刻表本身同时是"后台什么时候刷"和"一天最多请求几次模型"这两件事的参数，
+ * 所以说明文字必须把第二件事也讲出来 —— 否则用户只会以为它是个定时器，
+ * 遇到"为什么有时候点一下秒出声、有时候要等"就完全没法解释。
+ */
+@Composable
+private fun UpdateSection(
+    index: String,
+    draft: UserSettings,
+    updating: Boolean,
+    playing: Boolean,
+    onChange: (UserSettings) -> Unit,
+    onEditSchedule: () -> Unit,
+    onPlayBriefNow: () -> Unit,
+    onUpdateBriefNow: () -> Unit,
+    onStopBrief: () -> Unit,
+) {
+    val brief = draft.brief
+
+    NothingSection(
+        index = index,
+        title = stringResource(R.string.section_update),
+        eyebrow = stringResource(R.string.eyebrow_playback),
+        desc = stringResource(R.string.section_update_desc),
+    ) {
+        // ---- 消费：把现成的那份念出来 ----
+        //
+        // 和点桌面小组件是**同一条路**（缓存优先），所以这两个入口的表现永远一致。
+        NothingButton(
+            text = stringResource(R.string.action_play_brief_now),
+            onClick = onPlayBriefNow,
+            filled = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            text = stringResource(R.string.action_play_brief_desc),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        // 播报中才出现的「停」，紧挨着「立即播报」。
+        //
+        // 它原来挂在 07 那半屏"运行状态"里（那块已撤），播报中想停得从上往下滚一整页 ——
+        // 而"停不下来"比"听不到"更急。一进一出放在同一处，才不用满页找出口。
+        if (playing) {
+            NothingButton(
+                text = stringResource(R.string.action_stop_brief),
+                onClick = onStopBrief,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+
+        // ---- 生产：去问一次模型，只要内容、不要声音 ----
+        //
+        // 刻意**不顺手念出来**：那样它就和上面的「立即播报」只差一个"用不用缓存"，
+        // 又回到那个分不清的状态了。刷新的产出是桌面点阵转彩 —— 那就是"刷好了"的信号。
+        NothingButton(
+            text = stringResource(
+                if (updating) R.string.action_updating else R.string.action_update_now,
+            ),
+            onClick = onUpdateBriefNow,
+            enabled = !updating,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            text = stringResource(R.string.action_update_now_desc),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Hairline(color = MaterialTheme.colorScheme.outlineVariant)
+
+        // ---- 两个开关留在一级：它们天天要被看见（"开着吗"是最常见的疑问），
+        // 而时刻表收进二级页。开关下面那行摘要负责回答"那它几点跑"。 ----
+        ScheduleSwitchRow(
+            title = stringResource(R.string.update_enabled),
+            desc = stringResource(R.string.update_enabled_desc),
+            checked = brief.updateEnabled,
+            summary = timesSummary(brief.updateTimes),
+            onCheckedChange = { onChange(draft.copy(brief = brief.copy(updateEnabled = it))) },
+        )
+
+        ScheduleSwitchRow(
+            title = stringResource(R.string.alarm_enabled),
+            desc = stringResource(R.string.alarm_enabled_desc),
+            checked = brief.alarmEnabled,
+            summary = timesSummary(brief.alarmTimes),
+            onCheckedChange = { onChange(draft.copy(brief = brief.copy(alarmEnabled = it))) },
+        )
+
+        NothingButton(
+            text = stringResource(R.string.action_edit_schedule),
+            onClick = onEditSchedule,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+/**
+ * 「开关 + 当前时刻」的一行。
+ *
+ * 时刻**不在这行里编辑**，只在这里显示：改时刻是低频动作（配一次就再不动），
+ * 但"现在设的是几点"是高频疑问，所以把答案摆在一级页、把编辑器收进二级页。
+ */
+@Composable
+private fun ScheduleSwitchRow(
+    title: String,
+    desc: String,
+    checked: Boolean,
+    summary: String,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = title, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    text = desc,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            NothingSwitch(checked = checked, onCheckedChange = onCheckedChange)
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = summary,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * 01 的二级页：两张时刻表。
+ *
+ * 它们是"配一次就再不动"的典型，但两张表加起来占掉一级页一整屏 ——
+ * 把天天要碰的「立即播报」挤到了下面。所以整块搬出来单独一页。
+ */
+@Composable
+private fun SchedulePage(
+    draft: UserSettings,
+    onChange: (UserSettings) -> Unit,
+    onBack: () -> Unit,
+    onAddTimeClick: () -> Unit,
+    onAddAlarmTimeClick: () -> Unit,
+) {
+    val brief = draft.brief
+
+    DetailPage(onBack = onBack) {
+        NothingSection(
+            index = "01",
+            title = stringResource(R.string.section_schedule),
+            eyebrow = stringResource(R.string.eyebrow_schedule),
+            desc = stringResource(R.string.section_schedule_desc),
+        ) {
+            // ---- 到点自动刷（只刷不出声）----
+            BlockLabel(text = stringResource(R.string.label_update_times))
+            TimeTable(
+                times = brief.updateTimes,
+                emptyText = stringResource(R.string.update_no_times),
+                onRemove = { time ->
+                    onChange(draft.copy(brief = brief.copy(updateTimes = brief.updateTimes - time)))
+                },
+            )
+            NothingButton(
+                text = stringResource(R.string.action_add_time),
+                onClick = onAddTimeClick,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                text = stringResource(R.string.update_cache_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Hairline(color = MaterialTheme.colorScheme.outlineVariant)
+
+            // ---- 到点自动播（出声，和上面是两回事）----
+            BlockLabel(text = stringResource(R.string.label_alarm_times))
+            TimeTable(
+                times = brief.alarmTimes,
+                emptyText = stringResource(R.string.alarm_no_times),
+                onRemove = { time ->
+                    onChange(draft.copy(brief = brief.copy(alarmTimes = brief.alarmTimes - time)))
+                },
+            )
+            NothingButton(
+                text = stringResource(R.string.action_add_time),
+                onClick = onAddAlarmTimeClick,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                text = stringResource(R.string.alarm_cache_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun TimeTable(
+    times: List<LocalTime>,
+    emptyText: String,
+    onRemove: (LocalTime) -> Unit,
+) {
+    if (times.isEmpty()) {
+        Text(
+            text = emptyText,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    } else {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            times.forEach { time ->
+                TimeRow(time = time, onRemove = { onRemove(time) })
+            }
+        }
+    }
+}
+
+/** 一个更新时刻。用等宽样式显示，因为它是**时间**，不是一段文字。 */
+@Composable
+private fun TimeRow(time: LocalTime, onRemove: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            text = BriefSchedule.format(time),
+            style = MaterialTheme.typography.titleSmall,
+            modifier = Modifier.weight(1f),
+        )
+        SquareIconButton(
+            icon = Icons.Filled.Close,
+            contentDescription = stringResource(R.string.action_delete),
+            onClick = onRemove,
+        )
+    }
+}
+
+/**
+ * 添加一个更新时刻。
+ *
+ * 解析与查重都在这里做，直接改**草稿**（而不是立刻落盘）：
+ * 这一整页都是"草稿 + 显式保存"的模型，时刻也不例外 —— 否则用户点了删除
+ * 又不想保存时，就没有退路了。提示因此必须是弹窗内部的一行字
+ * （不能走 Snackbar：Snackbar 属于 Activity 那一层，这里失败时要保持弹窗开着）。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AddTimeDialog(
+    existing: List<LocalTime>,
+    onDismiss: () -> Unit,
+    onConfirm: (LocalTime) -> Unit,
+) {
+    // 默认指向"下一个整点"，比从 00:00 起手更贴近"加一个时刻"的本意。
+    val initialHour = remember { (java.time.LocalTime.now().hour + 1) % 24 }
+    val state = rememberTimePickerState(
+        initialHour = initialHour,
+        initialMinute = 0,
+        is24Hour = true,
+    )
+    var duplicated by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = {
+            Text(
+                text = stringResource(R.string.action_add_time),
+                style = MaterialTheme.typography.titleSmall,
+            )
+        },
+        text = {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                // 滚轮选时刻，比手输"09:30"字符串友好——不用记格式、不会输错。
+                // 24 小时制，与时刻表显示（BriefSchedule.format 输出 09:30）一致。
+                TimePicker(state = state)
+                if (duplicated) {
+                    Text(
+                        text = stringResource(R.string.msg_time_duplicated),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            NothingButton(
+                text = stringResource(R.string.action_add),
+                filled = true,
+                onClick = {
+                    val time = LocalTime.of(state.hour, state.minute)
+                    if (time in existing) {
+                        duplicated = true
+                    } else {
+                        onConfirm(time)
+                    }
+                },
+            )
+        },
+        dismissButton = {
+            NothingButton(
+                text = stringResource(R.string.action_cancel),
+                onClick = onDismiss,
+            )
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1429,60 +2474,109 @@ private fun PermissionRow(
 }
 
 // ---------------------------------------------------------------------------
-// 底部操作条
+// 悬浮操作胶囊（右下角）
 // ---------------------------------------------------------------------------
 
 /**
- * 固定底条。
+ * 右下角悬浮的"液态玻璃"操作胶囊：**保存配置** + 一个不带底色的**恢复默认**。
  *
- * 保存是这一页唯一的主操作，所以做成实底（白底上是纯黑块、黑底上是纯白块）；
- * "恢复默认"是破坏性操作，做成描边放在左边、宽度更窄 —— 不抢主操作的注意力，
- * 但位置固定、不会被滑走，改完配置不用再滚回去找。
+ * ## 为什么从通栏底条改成悬浮
+ *
+ * 原来是一条通栏底条（发丝线 + 两个直角按钮），它和内容抢版面：底条常驻 70dp，
+ * 列表尾部就得永久留白，而尾部恰是「权限」这种翻一次就够的地方 —— 用一整条
+ * 常驻横条去换它不划算。改成悬浮之后内容能一直滚到底，操作照样随手可及，
+ * 好处立刻体现在 `contentPadding` 上（少留 28dp）。
+ *
+ * ## 液态玻璃：第一版是模拟，这一版是真模糊
+ *
+ * Compose 1.6 自己**没有**背景模糊（`Modifier.blur` 只糊自己那份内容），
+ * 第一版用"半透明底 + 高光渐变 + 描边 + 投影"模拟 —— 压在纯色上像，压在
+ * 滚动的文字上就露馅（底下的字清晰透过来，一眼是块色片，不是玻璃）。
+ * 现在用 haze 库（dev.chrisbanes.haze 0.7.3，最后一代支持 Compose 1.6 的稳定版）
+ * 做真 backdrop blur：内容层 `Modifier.hazeChild(state)` 注册可被模糊的区域，
+ * 这里 `Modifier.haze(state, style)` 把那块区域取样并模糊。
+ * ⚠️ 0.7.x 命名反直觉：child = 被糊的内容、haze = 玻璃本身
+ * （1.x 起改名 hazeSource/hazeEffect），升级版本时签名会变，别直接平移。
+ * API 31+ 走 RenderEffect 真模糊；API 26–30
+ * 自动降级为半透明 tint（无模糊）—— 老机上观感退回第一版那种色片，可接受。
+ *
+ * 模糊之外的"玻璃感"来自 [glassMaterial]（两个按钮共用同一套材质）：
+ * 大半径模糊（28dp）+ 细噪点（0.05，防色带）+ **清透的 tint（0.55）** —— 浓了
+ * 模糊就被盖死，底下透不出明暗，玻璃会退化成"纯色片"（踩过：第一版 0.72 被主人
+ * 说"就一个纯色的按钮"）；顶部一条**贴着上缘**的白色高光带（果冻感的来源）；
+ * 上亮下暗的描边（下缘那条暗边是"玻璃厚度"）；大而淡的主色投影。
+ *
+ * ## 结构：保存 = 主胶囊，重置 = 圆形 icon 玻璃钮
+ *
+ * 两颗**分开**：保存是带文字的主胶囊（设计图那种），重置是一颗等高的圆玻璃钮
+ * （`Icons.Rounded.Refresh`），横向并排、间距 10dp —— 破坏性操作不该和主操作
+ * 挤在一颗胶囊里分不出主次（踩过：第一版做成"一根竖线隔两段"，被要求分开）。
+ * 重置仍走 [onReset] 的确认弹窗，icon 不直达。
+ *
+ * ## 颜色跟着主色走
+ *
+ * 底色直接取「小组件外观」那支色相 + 鲜艳度（同一个 `hsvColor`），所以按钮和
+ * 桌面点阵永远同色：用户拖色相时这一颗跟着变，不需要第二处配色入口。
+ * 文字/图标色**按玻璃的实际明度分流**：亮玻璃（黄/青/白）配暖黑字，深玻璃
+ * （深蓝/紫）配同色系提亮的亮字。⚠️ 设计图里"荧光字压亮黄底"是因为它截图的
+ * 环境底色深、玻璃透出来的东西暗；我们的设置页是浅色底，照抄只会两头都看不清
+ * （踩过：同色提亮黄字压黄玻璃，主人说"看不见字"）。**可读性优先。**
  *
  * [saveEnabled] 传的是"配置读完了没有"：读盘没回来之前草稿还是全默认值，
  * 这时候点保存会把**整份默认配置**盖到已有的配置上（API Key 一起没）。
- * 所以没读完就直接禁用按钮，别给用户一个能把数据写坏的入口。
+ * 所以没读完就整颗禁用，别给用户一个能把数据写坏的入口。
  */
 @Composable
-private fun ActionBar(
+private fun FloatingActions(
     saving: Boolean,
     saveEnabled: Boolean,
     onSave: () -> Unit,
     onReset: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(
-        modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.background),
+    val enabled = !saving && saveEnabled
+
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Hairline()
+        // 重置：白色方角按钮 + 刷新 icon。破坏性操作独立成颗，不和主操作挤在一起；
+        // 仍走 onReset 里的确认弹窗，icon 不是直达。白底黑字（图标），在纸白设置页上
+        // 靠 1px 发丝线描边从背景里浮出来。
+        Row(
+            modifier = Modifier
+                .height(46.dp)
+                .background(PureWhite)
+                .border(1.dp, MaterialTheme.colorScheme.outline)
+                .clickable(onClick = onReset)
+                .padding(horizontal = 18.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Refresh,
+                contentDescription = stringResource(R.string.action_reset),
+                tint = PureBlack,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+
+        // 保存：红色方角实底 + 白字，是全页唯一的主操作。红 = Nothing 的信号红（SignalRed），
+        // 白字在红底上对比拉满，不会再出现"玻璃 + 荧光字"那种看不清的情况。
         Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
+                .height(46.dp)
+                .background(SignalRed.copy(alpha = if (enabled) 1f else 0.35f))
+                .clickable(enabled = enabled, onClick = onSave)
+                .padding(horizontal = 24.dp),
             contentAlignment = Alignment.Center,
         ) {
-            Row(
-                modifier = Modifier
-                    .widthIn(max = ContentMaxWidth)
-                    .fillMaxWidth()
-                    .padding(vertical = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                NothingButton(
-                    text = stringResource(R.string.action_reset),
-                    onClick = onReset,
-                    modifier = Modifier.weight(1f),
-                )
-                NothingButton(
-                    text = stringResource(R.string.action_save),
-                    onClick = onSave,
-                    filled = true,
-                    enabled = !saving && saveEnabled,
-                    modifier = Modifier.weight(1.6f),
-                )
-            }
+            Text(
+                text = stringResource(R.string.action_save).uppercase(),
+                style = MaterialTheme.typography.labelLarge,
+                color = PureWhite.copy(alpha = if (enabled) 1f else 0.35f),
+                maxLines = 1,
+            )
         }
     }
 }

@@ -6,22 +6,24 @@
     <string name="settings_title">DotBrief</string>
     <string name="settings_tagline">点阵小组件 · 点击即出声</string>
     <string name="brand_eyebrow">widget</string>
-    <string name="app_version_line">BUILD 0.1.0</string>
 
-    <!-- 分区英文眉标：版式元素，走 lettera mono 的角色（小号、等宽、疏字距） -->
-    <string name="eyebrow_appearance">look</string>
-    <string name="eyebrow_tts">voice</string>
+    <!-- 分区英文眉标：版式元素，走 lettera mono 的角色（小号、等宽、疏字距）。
+         声明顺序与设置页分区顺序一致，改顺序时两边一起改。 -->
+    <string name="eyebrow_playback">playback</string>
     <string name="eyebrow_brief">content</string>
+    <string name="eyebrow_tts">voice</string>
+    <string name="eyebrow_appearance">look</string>
     <string name="eyebrow_llm">model</string>
     <string name="eyebrow_rss">feeds</string>
-    <string name="eyebrow_advanced">advanced</string>
-    <string name="eyebrow_system">system</string>
+    <string name="eyebrow_schedule">schedule</string>
+    <string name="eyebrow_system">permission</string>
 
     <string name="action_reset">恢复默认</string>
     <string name="action_save">保存配置</string>
     <string name="action_cancel">取消</string>
     <string name="action_show">显示</string>
     <string name="action_hide">隐藏</string>
+    <string name="action_collapse">收起</string>
     <string name="action_delete">删除</string>
     <string name="action_grant">去授权</string>
     <string name="action_add">添加</string>
@@ -30,29 +32,46 @@
     <string name="action_probe">检测接口连通性</string>
     <string name="action_probing">正在检测…</string>
 
+    <!-- 分区标题：按设置页从上到下的顺序排，改顺序时两边一起改 -->
+    <string name="section_update">播报与更新</string>
+    <string name="section_update_desc">点小组件是念现成的那份；想马上要一份新的，就在下面手动刷一次</string>
+    <string name="section_brief">简报内容</string>
+    <string name="section_brief_desc">念多长、往前看多久、抓哪些数据</string>
+    <string name="section_tts">语音播报</string>
+    <string name="section_tts_desc">决定点一下小组件之后，是谁在念给你听</string>
+    <string name="section_appearance">小组件外观</string>
+    <string name="section_appearance_desc">点阵预览、主色与霓虹轮播</string>
     <string name="section_llm">大模型接口</string>
     <string name="section_llm_desc">兼容 OpenAI 标准协议，可填 DeepSeek / OpenAI / Gemini 兼容端点 / 本地 Ollama</string>
     <string name="section_rss">新闻订阅源</string>
     <string name="section_rss_desc">每次汇总前各抓取最新条目，再交给模型提炼三条核心快讯</string>
-    <string name="section_tts">语音播报</string>
-    <string name="section_tts_desc">决定点一下小组件之后，是谁在念给你听</string>
-    <string name="section_brief">简报内容</string>
-    <string name="section_brief_desc">念多长、往前看多久、抓哪些数据</string>
-    <string name="section_appearance">小组件外观</string>
-    <string name="section_appearance_desc">点阵预览、主色与霓虹轮播</string>
-    <string name="section_permission">权限授权</string>
+    <string name="label_rss_catalog">推荐源（勾选即添加）</string>
+    <string name="label_rss_search">搜索源名</string>
+    <string name="msg_rss_no_match">没有匹配的源，换个关键词或自己添加</string>
 
-    <!-- 高级设置：默认折叠，只有还没配好（没有 API Key 或没有订阅源）时才自动展开 -->
-    <string name="section_advanced">高级设置</string>
-    <string name="section_advanced_desc">大模型接口与新闻订阅源 · 配好之后基本不用再动</string>
-    <string name="section_advanced_range">04 – 05</string>
-    <string name="action_expand">展开</string>
-    <string name="action_collapse">收起</string>
+    <!-- 01 的二级页：两张时刻表 -->
+    <string name="section_schedule">排期与时刻</string>
+    <string name="section_schedule_desc">到点自动刷新内容、到点自动出声播报，两张时刻表分开管</string>
+    <string name="action_edit_schedule">排期与时刻</string>
+    <string name="action_back_to_settings">设置</string>
 
-    <!-- 末尾的合并分区：把"装完就不用管"的权限和诊断状态收在一起 -->
-    <string name="section_system">权限与诊断</string>
-    <string name="block_status">运行状态</string>
-    <string name="block_permission">权限</string>
+    <!-- 二级页入口下面那行摘要：回答"我现在配的是什么"，省掉一次进二级页 -->
+    <string name="summary_bgm_on">背景音乐 开</string>
+    <string name="summary_bgm_off">背景音乐 关</string>
+    <string name="summary_hue">%1$s · 色相 %2$d°</string>
+    <string name="summary_profiles">已配 %1$d 份</string>
+    <string name="summary_llm_unset">未配置，只用本地信息</string>
+    <string name="summary_feeds">已选 %1$d 个源</string>
+    <string name="summary_permission">%1$d / %2$d 项已授权</string>
+    <string name="summary_times">%1$d 个时刻 · %2$s</string>
+    <string name="summary_times_none">未设时刻</string>
+    <string name="label_rss_custom">自定义源</string>
+
+    <!-- 末尾分区：只剩"装完就不用管"的三个权限开关。
+         原来还挂着半屏"诊断"（状态灯 / 上次生成时间 / 上次出错的原因原文），已经整块撤掉：
+         那些读数是给排错用的，不是给用户办事的，而且出问题不该等用户翻到这一页才发现 ——
+         现在失败当场弹 Toast（见 RuntimeToast.kt），原文仍旧落在 RuntimeKeys.LAST_ERROR 里。 -->
+    <string name="section_system">权限</string>
 
     <string name="label_base_url">Base URL</string>
     <string name="label_api_key">API Key</string>
@@ -61,15 +80,35 @@
     <string name="label_timeout">接口超时</string>
     <string name="label_system_prompt">系统提示词（决定播报风格）</string>
     <string name="label_tts_provider">播报引擎</string>
-    <string name="label_speech_rate">语速</string>
-    <string name="label_pitch">音调</string>
     <string name="label_lookahead">日程预读时长</string>
-    <string name="label_length">正文字数下限</string>
-    <string name="label_length_max">正文字数上限</string>
+    <string name="label_length">播报篇幅</string>
+    <string name="brief_length_short">约30秒</string>
+    <string name="brief_length_standard">约1分钟</string>
+    <string name="brief_length_long">约2分钟</string>
+    <string name="brief_length_hint">选的是"念多久"，不是字数。没什么可说的时候它会自己收短 —— 不会为了凑时长往里注水。</string>
     <string name="label_sources">参与聚合的数据源</string>
     <string name="brief_first_of_day_hint">每天第一次播报会先说今天是几月几号、星期几；同一天里再听，就直接讲事，不重复日期。天气只用"大致位置"，不需要精确站位。</string>
 
-    <string name="tech_brief_time">上次生成</string>
+    <!-- 播报与更新（分区 01）。下面这几行的顺序 = 界面上从上到下的顺序：
+         先手动（消费 / 生产），再自动。 -->
+    <string name="action_play_brief_desc">缓存还新鲜就直接念，不会再问模型；过期才重新生成</string>
+    <string name="action_update_now">刷新内容</string>
+    <string name="action_updating">正在刷新…</string>
+    <string name="action_update_now_desc">忽略已经刷好的那份，现在就问一次模型。刷新不会出声 —— 桌面点阵转彩就是刷好了，点一下就能听</string>
+    <string name="update_enabled">到点自动刷新内容</string>
+    <string name="update_enabled_desc">只把内容准备好，不会自己出声</string>
+    <string name="label_update_times">更新时刻</string>
+    <string name="update_no_times">还没设时刻 —— 只有在点小组件时才会生成新内容。</string>
+    <string name="update_cache_hint">点小组件时先念"最近一个时刻之后"刷出来的那一份，缓存过期才重新生成。所以一天大致只请求模型几次，而不是每点一次都请求。</string>
+    <string name="action_add_time">添加时刻</string>
+    <string name="msg_time_duplicated">这个时刻已经设过了</string>
+
+    <!-- 定时出声播报（闹钟）。与「到点自动刷新」区分：那是只刷不出声，这是到点出声。 -->
+    <string name="alarm_enabled">定时自动播报</string>
+    <string name="alarm_enabled_desc">到点自动出声，像闹钟一样把简报念出来</string>
+    <string name="label_alarm_times">播报时刻</string>
+    <string name="alarm_no_times">还没设时刻 —— 打开开关后，加一个时刻（比如早上 07:00）才会出声。</string>
+    <string name="alarm_cache_hint">到点先看有没有 4 小时内刷好的内容：有就直接念，没有就先刷新再念，保证听到的不是旧闻。</string>
 
     <string name="hint_api_key">sk-…</string>
     <string name="hint_feed_name">订阅源名称</string>
@@ -84,7 +123,28 @@
     <string name="label_doubao_speaker">音色 ID</string>
     <string name="label_doubao_resource_id">Resource ID</string>
     <string name="doubao_hint">API Key 要用火山引擎「语音技术」控制台的：左侧菜单 → API Key 管理 → 创建 API Key，拿到一串 UUID 形式的值。⚠️ 火山方舟（Ark）那边的 Key 不能用在语音接口上，填了会报 Invalid X-Api-Key。音色 ID 与 Resource ID 必须同代次（2.0 音色配 seed-tts-2.0），配错会报「音色与资源不匹配」。改完点最下面的「保存」，再用「试听一句」验证。</string>
+    <string name="tts_bgm_enabled">背景音乐</string>
+    <string name="tts_bgm_enabled_desc">等待模型的那几秒先放一段，开口后压低当垫底</string>
     <string name="llm_local_fallback_hint">不填也能用：组件会只用本地信息（日程 / 行程 / 包裹）生成简报，新闻快讯需要模型提炼、会缺席。</string>
+    <string name="llm_failover_hint">可存多份接口配置。生成时按顺序从上到下试，第一份失败会自动换下一份——想换主用，把那一份「设为主用」挪到最上即可。</string>
+    <string name="llm_primary_badge">主用 · 失败自动切换的首选</string>
+    <string name="llm_tuning_hidden_hint">发散度、超时、系统提示词按内置默认值维护，这里只填接口地址、钥匙和模型名。</string>
+    <string name="action_add_profile">新增一份接口配置</string>
+    <string name="action_make_primary">设为主用</string>
+    <string name="label_profile_name">配置名称（可选）</string>
+
+    <!-- 接口调用日志 -->
+    <string name="action_view_log">查看接口日志</string>
+    <string name="log_title">接口调用日志</string>
+    <string name="log_clear">清空</string>
+    <string name="log_empty">还没有调用记录。生成一份简报（或点一下小组件）之后，这里会列出每次各份接口的成败。</string>
+    <string name="action_close">关闭</string>
+    <string name="log_source_widget">点组件</string>
+    <string name="log_source_manual">立即播报</string>
+    <string name="log_source_refresh">刷新内容</string>
+    <string name="log_source_auto">定时刷新</string>
+    <string name="log_source_alarm">定时播报</string>
+    <string name="log_source_other">其他</string>
 
     <string name="label_accent_hue">点阵主色</string>
     <string name="label_accent_saturation">鲜艳度</string>
@@ -116,19 +176,11 @@
     <string name="permission_granted">已授权</string>
     <string name="permission_manual_hint">权限被拒绝过？到系统设置里手动开启</string>
 
-    <string name="status_title">小组件状态</string>
-    <string name="status_last_brief">最近一次简报</string>
-    <string name="status_empty">还没有生成过简报。配好接口、加好小组件后，到桌面点一下就出声。</string>
-    <!-- 出错只说"怎么办"，不贴原始异常：异常本身对用户没有可操作性 -->
-    <string name="status_error_hint">上次生成没成功。点下面的「立即播报一次」可以重试；如果反复失败，检查一下大模型接口。</string>
-
     <string name="state_new_content">有新内容</string>
 
-    <string name="action_play_brief_now">立即播报一次</string>
+    <string name="action_play_brief_now">立即播报</string>
     <string name="action_stop_brief">停止播报</string>
-    <string name="msg_playback_start_failed">启动播报服务失败，请检查是否允许后台运行</string>
-    <string name="listener_connected">通知读取服务已连接</string>
-    <string name="listener_disconnected">通知读取服务未连接（需在系统设置里勾选通知使用权）</string>
+    <string name="msg_playback_start_failed">播报启动失败</string>
 
     <string name="state_idle">待机</string>
     <string name="state_generating">正在生成…</string>
@@ -136,21 +188,21 @@
     <string name="state_error">异常</string>
 
     <string name="msg_saved">已保存</string>
+    <string name="msg_brief_updated">内容已更新</string>
     <string name="msg_reset_done">已恢复出厂配置</string>
     <string name="msg_reset_confirm_title">恢复默认？</string>
     <string name="msg_reset_confirm_desc">配色、语音引擎、数据源、订阅源都会回到默认值，「已经填好的 API Key 也会一起清空」（要重新回控制台复制）。这一步无法撤销。</string>
-    <string name="msg_api_key_missing">已保存。没填 API Key 时也能用，只是只用本地信息（日程 / 行程 / 包裹）生成简报</string>
+    <string name="msg_api_key_missing">已保存（未填 API Key，仅本地信息）</string>
     <string name="msg_feed_added">订阅源已添加</string>
     <string name="msg_feed_duplicated">这个地址已经添加过了</string>
     <string name="msg_feed_url_invalid">地址不合法，请填 RSS / Atom 链接</string>
     <string name="msg_feed_name_required">请给订阅源起个名字</string>
     <string name="msg_no_enabled_feed">当前没有启用的订阅源，快讯部分会为空</string>
-    <string name="msg_length_range_invalid">字数范围不合法：下限不能大于上限</string>
-    <string name="msg_preview_speaking">正在用当前语速试听…</string>
+    <string name="msg_preview_speaking">正在试听…</string>
     <string name="msg_preview_synthesizing">正在向豆包合成语音…</string>
     <string name="msg_doubao_incomplete">豆包的 API Key / 音色 ID 还没填全</string>
     <string name="notif_synthesizing">正在合成语音…</string>
-    <string name="preview_sample_text">你好，我是你的私人管家。这是当前语速和音调的试听效果。</string>
+    <string name="preview_sample_text">你好，我是你的私人管家。今天的行程、快递和快讯，我会在这里念给你听。</string>
 
     <!-- 桌面小组件。注意这里**没有字幕文案**：组件上不显示任何文字 -->
     <string name="widget_label">DotBrief</string>
@@ -163,6 +215,7 @@
     <string name="notif_generating">正在汇总今天的日程、行程和快讯…</string>
     <string name="notif_playing_title">正在播报今日简报</string>
     <string name="notif_playing_text">点击桌面小组件可以打断</string>
+    <string name="notif_paused_text">已暂停，点击小组件继续播报</string>
 
     <!-- 通知监听服务在系统「通知使用权」列表里显示的名字 -->
     <string name="notification_listener_label">DotBrief 通知读取</string>

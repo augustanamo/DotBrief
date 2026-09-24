@@ -3,6 +3,8 @@ package com.augustana.dotbrief.domain
 import com.augustana.dotbrief.data.ingest.AgendaEvent
 import com.augustana.dotbrief.data.ingest.BriefInput
 import com.augustana.dotbrief.data.ingest.CapturedItem
+import com.augustana.dotbrief.data.ingest.DayPart
+import com.augustana.dotbrief.data.ingest.MoonPhase
 import com.augustana.dotbrief.data.ingest.WeatherInfo
 
 /**
@@ -38,26 +40,48 @@ object LocalBriefComposer {
 
     fun compose(input: BriefInput): String {
         val parts = mutableListOf<String>()
-        parts += "现在是${input.nowText}。"
+        // nowText 已自带开场形态：闹钟是"现在是上午7点"，其余是"早上好"（见 GenerateBriefUseCase.collect）。
+        parts += "${input.nowText}。"
 
         // 纪念日排在最前面：它是今天最有分量的一件事，不该被日程和天气挤到后面。
         // 每条单独成句 —— "今天是妈妈生日，结婚纪念日"这种念法是机器味。
         input.anniversaries.forEach { parts += "今天是${it.title}。" }
 
+        // 节日紧随纪念日之后：同样是"今天/临近的人情味"。今天过节单说一句祝福，
+        // 还没到的就报个倒计时（"距国庆还有 8 天"），让人心里有数、也能提前安排。
+        input.festivals.forEach { festival ->
+            parts += if (festival.daysFromNow == 0) {
+                "今天是${festival.title}。"
+            } else if (festival.daysFromNow == 1) {
+                "明天是${festival.title}。"
+            } else {
+                "距${festival.title}还有 ${festival.daysFromNow} 天。"
+            }
+        }
+
+        // 月相：一句带过，只在算得出来（非 UNKNOWN）时提。放在天气之前，
+        // 因为它和"今天什么日子"是同一种语境，而不是"今天穿什么"。
+        if (input.moonPhase != MoonPhase.UNKNOWN) {
+            parts += "今晚是${input.moonPhase.label}。"
+        }
+
         // 天气紧随其后：它是"此刻外面是什么样"，是这几句里唯一一个
-        // "出门之前用得上"的信息。
-        input.weather?.let { parts += it.describe() }
+        // "出门之前用得上"的信息。时段交给它自己分流（白天说今天、夜里说明天）。
+        input.weather?.let { parts += it.describe(input.dayPart) }
 
         val hasAgenda = input.events.isNotEmpty() ||
             input.trips.isNotEmpty() ||
             input.packages.isNotEmpty()
 
         if (!hasAgenda) {
-            // 只有天气或纪念日也算"说了点什么"，这时候再补一句"没有日程"是废话。
-            // 真正什么都没取到时（连天气都没有）才需要交代一句，免得用户以为是空响。
-            if (input.weather == null && input.anniversaries.isEmpty()) {
+            // 只有天气、纪念日、节日或月相也算"说了点什么"，这时候再补一句"没有日程"是废话。
+            // 真正什么都没取到时（连这些都没有）才需要交代一句，免得用户以为是空响。
+            if (input.weather == null && input.anniversaries.isEmpty() &&
+                input.festivals.isEmpty() && input.moonPhase == MoonPhase.UNKNOWN
+            ) {
                 parts += "暂时没有需要提醒的日程、行程和包裹。"
             }
+            input.lateNightHint?.let { parts += it }
             return parts.joinToString("")
         }
 
@@ -81,44 +105,86 @@ object LocalBriefComposer {
             parts += "有 ${packages.size} 个包裹待取：${packages.joinToString("；")}。"
         }
 
+        // 深夜结尾带一句关心休息的话 —— 这会儿还醒着的人，结尾收在"夜深了，早点休息"
+        // 比干巴巴说完就停更有人情味。白天 lateNightHint 为 null，这行不出现。
+        input.lateNightHint?.let { parts += it }
+
         return parts.joinToString("")
     }
 
     /**
-     * "外面26度，多云，今天22到31度。下午3点前后可能有雨，出门带把伞。"
+     * 白天："外面26度，多云。今天22到31度。下午3点前后可能有雨，出门带把伞。"
+     *
+     * 入夜换成："外面23度，多云。明天多云，18到26度。明天上午9点前后可能有雨，出门带把伞。"
+     * —— 夜里再念一遍今天的最高最低温是废话，那时候人想知道的是明天穿什么
+     * （分流规则见 [DayPart]）。
      *
      * 三件事分开说，而且都是**行动建议**而不是数据播报：
      * - 下雨给的是"几点"而不是概率数字 —— TTS 念 "50%" 会变成"百分之五十"
      *   甚至"五零百分号"，而听的人只关心"带不带伞"；
-     * - 紫外线按档位给不同的话，中等和强不是一回事；
+     * - 紫外线按档位给不同的话，中等和强不是一回事；而且过了那个点它自己就不提了
+     *   （见 [WeatherInfo.uvNeedsCare]），这里不需要再判一次；
      * - 空气质量只在差的时候提，好天气不该占一次开口。
      * 日出日落只在当天第一次播报时出现在素材里，所以这里不用再判断。
      */
-    private fun WeatherInfo.describe(): String = buildString {
-        append("外面${temperature}度，$condition")
-        if (high != low) append("，今天${low}到${high}度")
-        append("。")
+    private fun WeatherInfo.describe(part: DayPart): String {
+        val forecast = if (part == DayPart.TONIGHT) tomorrow else null
 
-        if (rainAtText != null) {
-            append("${rainAtText}前后可能有雨，出门带把伞。")
-        } else if ((precipitationProbability ?: 0) >= RAIN_LIKELY_PERCENT) {
-            // 逐小时数据里找不到未来的雨点（比如雨已经在早上下完了），
-            // 但全天概率仍然很高 —— 退回一句笼统的提醒，别把这条信息丢了。
-            append("今天可能会有雨，出门记得带把伞。")
+        // 夜里报的是明天那组数据，白天报今天的。两组字段名一样、只有前缀不同，
+        // 所以先把"用哪一组"挑出来，下面每句话只写一遍。
+        val prefix: String
+        val atText: String?
+        val probability: Int?
+        val sunrise: String?
+        val sunset: String?
+        if (forecast == null) {
+            prefix = "今天"
+            atText = rainAtText
+            probability = precipitationProbability
+            sunrise = sunriseText
+            sunset = sunsetText
+        } else {
+            prefix = "明天"
+            atText = forecast.rainAtText
+            probability = forecast.precipitationProbability
+            sunrise = forecast.sunriseText
+            sunset = forecast.sunsetText
         }
 
-        if (uvNeedsCare) {
-            append(if (uvIsStrong) "紫外线挺强，注意防晒。" else "紫外线中等，出门涂点防晒。")
-        }
+        return buildString {
+            append("外面${temperature}度，$condition。")
 
-        if (airIsBad) append("空气不太好，出门戴个口罩。")
+            if (forecast != null) {
+                append("明天${forecast.condition}")
+                if (forecast.high != forecast.low) append("，${forecast.low}到${forecast.high}度")
+                append("。")
+            } else if (high != low) {
+                append("今天${low}到${high}度。")
+            }
 
-        if (sunriseText != null || sunsetText != null) {
-            append("今天")
-            sunriseText?.let { append("${it}日出") }
-            if (sunriseText != null && sunsetText != null) append("、")
-            sunsetText?.let { append("${it}日落") }
-            append("。")
+            when {
+                atText != null -> append("$prefix${atText}前后可能有雨，出门带把伞。")
+                // 逐小时数据里找不到未来的雨点（比如雨已经在早上下完了），
+                // 但全天概率仍然很高 —— 退回一句笼统的提醒，别把这条信息丢了。
+                // ⚠️ 必须是 ${prefix}：汉字算合法的标识符字符，
+                // `"$prefix可能会有雨"` 会被当成一个叫 `prefix可能会有雨` 的变量。
+                (probability ?: 0) >= RAIN_LIKELY_PERCENT ->
+                    append("${prefix}可能会有雨，出门记得带把伞。")
+            }
+
+            if (uvNeedsCare) {
+                append(if (uvIsStrong) "紫外线挺强，注意防晒。" else "紫外线中等，出门涂点防晒。")
+            }
+
+            if (airIsBad) append("空气不太好，出门戴个口罩。")
+
+            if (sunrise != null || sunset != null) {
+                append(prefix)
+                sunrise?.let { append("${it}日出") }
+                if (sunrise != null && sunset != null) append("、")
+                sunset?.let { append("${it}日落") }
+                append("。")
+            }
         }
     }
 

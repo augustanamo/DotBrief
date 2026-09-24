@@ -51,6 +51,14 @@ object DotMatrixArt {
     private const val FALLOFF_INNER = 0.10f
     private const val FALLOFF_OUTER = 0.72f
 
+    /**
+     * 播报进度「灰盘」边缘的柔化带宽度（相对整块对角半径）。
+     *
+     * 0.10 是"看得出界限、但看不出被切过"的折中：太窄（≤0.03）会变成一圈机械的硬环，
+     * 像扫描线；太宽（≥0.25）则整块点阵一直在半灰状态，进度反而读不出来。
+     */
+    private const val FADE_SOFT_RATIO = 0.10f
+
     /** 位图上限：ARGB_8888 每像素 4 字节，400 x 400 ≈ 640KB，留在 Binder 单次事务 1MB 红线内。 */
     const val MAX_ART_PX: Int = 400
     const val MIN_ART_PX: Int = 120
@@ -141,6 +149,19 @@ object DotMatrixArt {
      * [hueShift] 在轮播模式下逐帧递增（见 [carouselHueShift]），静态时可省；
      * [muted] 为真时整块转灰阶（没有新内容），此时 [hueShift] 与 [accent] 的色相都会被忽略，
      * 只保留 [accent] 的鲜艳度之外的那套明暗体积 —— 灰点阵依旧是有立体感的，不是一坨平灰。
+     * [progress] 是**播报进度**（0..1）：已经念过的那部分褪成灰，成一枚从中心向外扩的"念过的圆盘"。
+     *
+     * ## 进度为什么长这样
+     *
+     * 点阵的视觉主体本来就是一枚**径向**光晕（中心亮核 + 向外的滚降），所以进度也按径向走 ——
+     * 灰盘从中心长出去，形状与它覆盖的东西同构。换成"从上往下扫"那种进度条形状，
+     * 会在圆形光晕上切出一道与几何无关的直线，看起来像屏幕坏了。
+     *
+     * 两个边界都刻意留了余量：
+     * - `progress = 0` 时灰盘半径是**负的**（连着柔化带一起落在中心之外），所以待机/起播第一帧
+     *   不会有任何一颗点被提前染灰；
+     * - 服务侧也压在 0.92 左右不会给到 1（见 `BriefPlaybackService.MAX_VISIBLE_PROGRESS`），
+     *   最后那一点灰由"播报结束、回待机"接手 —— 否则声音还在响，点阵已经全灰，像提前结束了。
      */
     fun render(
         sizePx: Int,
@@ -148,6 +169,7 @@ object DotMatrixArt {
         accent: AccentColor = AccentColor(),
         hueShift: Float = 0f,
         muted: Boolean = false,
+        progress: Float = 0f,
     ): Bitmap {
         val size = sizePx.coerceIn(MIN_ART_PX, MAX_ART_PX)
         val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
@@ -182,6 +204,23 @@ object DotMatrixArt {
         val glowRadius = side * GLOW_RADIUS_RATIO * (0.94f + 0.08f * safeGlow)
         val brightness = BRIGHTNESS_MIN + BRIGHTNESS_RANGE * safeGlow
 
+        // ---- 已念过的部分褪成的那套灰 ----
+        //
+        // 与 muted 模式**同源**（同一个 34° 暖灰、同一套 S/V），不是另调一个灰：
+        // 这样播到最后一颗点时，点阵正好无缝长成"待机"的样子，
+        // 中间不会出现"灰化用的灰"和"待机用的灰"两种灰打架。
+        val fading = !muted && progress > 0f
+        val fadedCore = argb(MUTED_HUE, SAT_CORE * MUTED_SATURATION, VAL_CORE * MUTED_VALUE_SCALE)
+        val fadedMid = argb(MUTED_HUE + HUE_OFFSET_MID, SAT_MID * MUTED_SATURATION, VAL_MID * MUTED_VALUE_SCALE)
+        val fadedBase = argb(MUTED_HUE + HUE_OFFSET_BASE, SAT_BASE * MUTED_SATURATION, VAL_BASE * MUTED_VALUE_SCALE)
+
+        // 灰盘半径：`progress` 从 0 走到 1 时，它从"中心之外的负半径"扩到"盖住整块"。
+        // 归一化的基准取**中心到角的距离**（最远的那几颗点就在四角），而不是光晕半径 ——
+        // 光晕半径只有半宽，拿它当分母的话进度到 1 时四角还是彩的。
+        val reach = side * 0.7071f
+        val fadeSoft = reach * FADE_SOFT_RATIO
+        val fadeRadius = -fadeSoft + progress.coerceIn(0f, 1f) * (reach + 2f * fadeSoft)
+
         val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
         for (row in 0 until GRID) {
@@ -189,7 +228,8 @@ object DotMatrixArt {
                 val x = (column + 0.8f) * pitch
                 val y = (row + 0.8f) * pitch
 
-                val distance = hypot(x - centerX, y - centerY) / glowRadius
+                val radial = hypot(x - centerX, y - centerY)
+                val distance = radial / glowRadius
                 val falloff = smoothstep(FALLOFF_INNER, FALLOFF_OUTER, 1f - distance)
 
                 var intensity = falloff * brightness
@@ -198,7 +238,15 @@ object DotMatrixArt {
                 intensity *= 0.88f + 0.24f * noise(column, row)
                 intensity = intensity.coerceIn(0f, 1f)
 
-                dotPaint.color = ramp(intensity, baseColor, midColor, coreColor)
+                val color = ramp(intensity, baseColor, midColor, coreColor)
+                dotPaint.color = if (fading) {
+                    // 灰化边界用 smoothstep 柔化：硬边界会在圆形光晕上切出一圈"机械"的环，
+                    // 像扫描线；柔化之后它是"念过的部分慢慢冷下去"，而不是被谁划掉了。
+                    val fade = smoothstep(fadeRadius + fadeSoft, fadeRadius - fadeSoft, radial)
+                    if (fade > 0f) blend(color, ramp(intensity, fadedBase, fadedMid, fadedCore), fade) else color
+                } else {
+                    color
+                }
                 canvas.drawCircle(x, y, dotRadius * (0.86f + 0.28f * intensity), dotPaint)
             }
         }

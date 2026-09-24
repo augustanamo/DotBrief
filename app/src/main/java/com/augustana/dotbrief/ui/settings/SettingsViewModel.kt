@@ -10,6 +10,8 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.augustana.dotbrief.R
 import com.augustana.dotbrief.data.llm.LlmClient
+import com.augustana.dotbrief.data.llm.LlmCallLogStore
+import com.augustana.dotbrief.data.llm.LlmCallLogEntry
 import com.augustana.dotbrief.data.llm.LlmProbeResult
 import com.augustana.dotbrief.data.local.dao.CapturedNotificationDao
 import com.augustana.dotbrief.data.settings.AddRssFeedResult
@@ -20,6 +22,9 @@ import com.augustana.dotbrief.data.settings.UserSettings
 import com.augustana.dotbrief.data.settings.WidgetRuntimeState
 import com.augustana.dotbrief.data.tts.DoubaoTtsClient
 import com.augustana.dotbrief.data.tts.SpeechResult
+import com.augustana.dotbrief.data.update.BriefUpdateScheduler
+import com.augustana.dotbrief.data.update.BriefUpdater
+import com.augustana.dotbrief.data.update.BriefAlarmScheduler
 import com.augustana.dotbrief.di.AppContainer
 import com.augustana.dotbrief.tts.BriefPlaybackService
 import com.augustana.dotbrief.tts.CloudTtsPlayer
@@ -30,6 +35,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -50,6 +56,10 @@ class SettingsViewModel(
     private val capturedNotificationDao: CapturedNotificationDao,
     private val llmClient: LlmClient,
     private val doubaoTtsClient: DoubaoTtsClient,
+    private val briefUpdateScheduler: BriefUpdateScheduler,
+    private val briefUpdater: BriefUpdater,
+    private val briefAlarmScheduler: BriefAlarmScheduler,
+    private val llmCallLog: LlmCallLogStore,
 ) : AndroidViewModel(application) {
 
     data class UiState(
@@ -61,10 +71,17 @@ class SettingsViewModel(
         val probing: Boolean = false,
         val probeResult: String? = null,
         val probeOk: Boolean = false,
+        /** 「刷新内容」的进行态：正在问模型，期间按钮要禁掉（连点会并发发好几次）。 */
+        val updating: Boolean = false,
     )
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+
+    /** LLM 调用日志（最近 N 条，新的在前），设置页「接口日志」弹窗订阅它。 */
+    val logEntries: StateFlow<List<LlmCallLogEntry>> = llmCallLog.entries
+        .map { it.asReversed() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
     /**
      * 小组件运行状态 + 最近一次简报 + **还有没有没听过的新内容**，用于状态卡片回显。
@@ -72,12 +89,17 @@ class SettingsViewModel(
      * [WidgetRuntimeState.unheard] 不在 DataStore 里（它是算出来的，见字段注释），
      * 所以这里把"通知库最新入库时间"这条 Room Flow 并进来当场算：
      * 用户在系统里收到一条测试通知、切回本页，这一行字会自己变，不需要重进页面。
+     *
+     * 判据有两半，与 [com.augustana.dotbrief.widget.BriefFreshness] 保持一致：
+     * 有没听过的通知，**或者**定时刷新出来的那份简报还没被听过。
      */
     val runtimeState: StateFlow<WidgetRuntimeState> = combine(
         runtimeStateStore.state,
         capturedNotificationDao.latestCapturedAtFlow(),
     ) { state, latestCapturedAt ->
-        state.copy(unheard = (latestCapturedAt ?: 0L) > state.lastHeardAtEpochSeconds)
+        val newerNotification = (latestCapturedAt ?: 0L) > state.lastHeardAtEpochSeconds
+        val freshBrief = state.lastBriefAtEpochSeconds > state.lastHeardAtEpochSeconds
+        state.copy(unheard = newerNotification || freshBrief)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), WidgetRuntimeState())
 
     private val previewPlayer = TtsPreviewPlayer(application)
@@ -109,23 +131,25 @@ class SettingsViewModel(
         // 这里再兜一道：按钮状态和状态流之间总有窗口，而这一次写坏的东西不可恢复。
         if (!_uiState.value.loaded) return
 
+        // 「下限不能大于上限」这条校验随两个字数滑杆一起删掉了：篇幅现在是枚举档位，
+        // 上下限成对写在枚举里，结构上不可能矛盾 —— 那个校验属于两个滑块各调各的年代。
         val draft = _uiState.value.draft
-
-        if (draft.brief.minChars > draft.brief.maxChars) {
-            postMessage(R.string.msg_length_range_invalid)
-            return
-        }
 
         viewModelScope.launch {
             _uiState.update { it.copy(saving = true) }
             settingsRepository.replace(draft)
             _uiState.update { it.copy(saving = false) }
+            // 时刻表可能刚被改过，排期得跟着重排。少了这一步，改完时刻要等到
+            // 原来那个时刻跑完一轮才生效 —— 表现是"我明明改成下午三点了，它还是两点刷"。
+            briefUpdateScheduler.reschedule()
+            // 定时播报的开关/时刻也可能刚改过，同样重排。
+            briefAlarmScheduler.reschedule()
             // 保存后立刻把配置推一次到桌面。
             // 少了这一步，"换色"就要等到下一次点击小组件才生效 ——
             // 用户会以为滑块坏了（桌面明明什么都没变）。
             BriefWidgetProvider.refreshAll(getApplication())
             postMessage(
-                if (draft.llm.isReady) R.string.msg_saved else R.string.msg_api_key_missing,
+                if (draft.llm.anyReady) R.string.msg_saved else R.string.msg_api_key_missing,
             )
         }
     }
@@ -134,6 +158,10 @@ class SettingsViewModel(
         viewModelScope.launch {
             settingsRepository.resetToDefaults()
             _uiState.update { it.copy(draft = UserSettings()) }
+            // 恢复默认后时刻表也回到默认（定时播报默认关闭），排期要跟着重排——
+            // 否则"恢复默认"之后旧的闹钟排期还在，第二天照样出声。
+            briefUpdateScheduler.reschedule()
+            briefAlarmScheduler.reschedule()
             postMessage(R.string.msg_reset_done)
         }
     }
@@ -170,6 +198,14 @@ class SettingsViewModel(
         }
     }
 
+    /** 勾选 / 取消推荐源目录（`Defaults.RSS_CATALOG`）里的一个预设源。 */
+    fun togglePresetFeed(preset: com.augustana.dotbrief.data.settings.RssFeed, checked: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.togglePresetFeed(preset, checked)
+            _uiState.update { it.copy(draft = settingsRepository.snapshot()) }
+        }
+    }
+
     /**
      * 用当前配置念一句示例文本。
      *
@@ -182,7 +218,7 @@ class SettingsViewModel(
 
         when (tts.provider) {
             TtsProvider.SYSTEM -> {
-                previewPlayer.speak(sample, tts.speechRate, tts.pitch)
+                previewPlayer.speak(sample)
                 postMessage(R.string.msg_preview_speaking)
             }
 
@@ -211,24 +247,64 @@ class SettingsViewModel(
     /**
      * 不等桌面小组件，直接从设置页跑一遍完整播报链路。
      *
-     * 走的是**同一个** [BriefPlaybackService]，和点桌面小组件完全一致，
-     * 所以这个按钮既是「试听」，也是验证端到端链路的探针：
+     * 走的是**同一个** [BriefPlaybackService]，和点桌面小组件完全一致（包括"缓存还新鲜就先念现成的"
+     * 这条规矩），所以这个按钮既是「试听」，也是验证端到端链路的探针：
      * 桌面动效状态、前台通知、TTS 朗读都会真实发生。
      */
     fun playBriefNow() {
-        val context = getApplication<Application>()
-        val intent = Intent(context, BriefPlaybackService::class.java)
-            .setAction(BriefPlaybackService.ACTION_TOGGLE)
-        runCatching { context.startForegroundService(intent) }
-            .onFailure { postMessage(R.string.msg_playback_start_failed) }
+        startPlayback(BriefPlaybackService.ACTION_TOGGLE)
+    }
+
+    /**
+     * 不等下一个更新时刻，现在就去要一份新的内容。**只刷不念。**
+     *
+     * ## 为什么"刷"和"念"是两个按钮，而不是"带不带缓存"两个按钮
+     *
+     * 这里一度摆过一对按钮：「立即播报」+「重新生成并播报」，差别只有"用不用缓存"。
+     * 那个划分是坏的 —— 用户没法从字面上看出区别，两个按钮九成时间表现还一样。
+     * 后来我把「重新生成」删掉了，那是删过头："我现在就想要一份新的"从此没了出口
+     * （真机上被问回来一句"那怎么手动更新？"）。
+     *
+     * 现在按**生产 / 消费**划开，两者永不重叠：
+     * - 「立即播报」= 消费：把现成的那份念出来（缓存过期才顺带生成）；
+     * - 「刷新内容」= 生产：问一次模型、写好、点亮桌面点阵，**但不出声**。
+     *
+     * 于是"刷新完点阵变彩"正好成了成功的可见反馈，用户回桌面点一下就能听到；
+     * 而"每次点小组件都请求模型"这条仍然被堵着 —— 强制刷新是个显式动作，
+     * 只有用户站在设置页、明说要一份新的时才发生。
+     *
+     * 跑在 viewModelScope 里而不丢给 WorkManager：这是用户在前台等着看结果的动作，
+     * 结论要马上变成提示语。真正的生成逻辑已经抽到 [BriefUpdater]，
+     * 不存在"两处实现漂移"，所以没必要为了复用再绕一趟后台任务。
+     */
+    fun updateBriefNow() {
+        // 连点两下会并发发两次模型请求。按钮那边也会禁用，这里再兜一道。
+        if (_uiState.value.updating) return
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(updating = true) }
+            val result = briefUpdater.run(force = true)
+            _uiState.update { it.copy(updating = false) }
+
+            when (result) {
+                is BriefUpdater.Outcome.Updated -> postMessage(R.string.msg_brief_updated)
+                is BriefUpdater.Outcome.Failed -> postMessageText(result.message)
+                // force = true 时闸门被跳过，走不到这儿；真走到了也只是"什么也没做"，不必打扰。
+                BriefUpdater.Outcome.Skipped -> Unit
+            }
+        }
     }
 
     /** 若正在朗读则立刻打断，与再点一次小组件等价。 */
     fun stopBrief() {
+        startPlayback(BriefPlaybackService.ACTION_STOP)
+    }
+
+    private fun startPlayback(action: String) {
         val context = getApplication<Application>()
-        val intent = Intent(context, BriefPlaybackService::class.java)
-            .setAction(BriefPlaybackService.ACTION_STOP)
+        val intent = Intent(context, BriefPlaybackService::class.java).setAction(action)
         runCatching { context.startForegroundService(intent) }
+            .onFailure { postMessage(R.string.msg_playback_start_failed) }
     }
 
     /**
@@ -239,7 +315,7 @@ class SettingsViewModel(
      */
     fun probeLlm() {
         val draft = _uiState.value.draft
-        if (!draft.llm.isReady) {
+        if (!draft.llm.primary.isReady) {
             _uiState.update {
                 it.copy(probeOk = false, probeResult = "Base URL / API Key / 模型名还没填全")
             }
@@ -248,7 +324,7 @@ class SettingsViewModel(
 
         viewModelScope.launch {
             _uiState.update { it.copy(probing = true, probeResult = null) }
-            val result = llmClient.probe(draft.llm)
+            val result = llmClient.probe(draft.llm.primary)
             _uiState.update {
                 it.copy(
                     probing = false,
@@ -264,6 +340,42 @@ class SettingsViewModel(
 
     fun consumeMessage() {
         _uiState.update { it.copy(message = null) }
+    }
+
+    // ---------- 多份 AI 配置 ----------
+
+    /** 新增一份空配置并设为当前编辑。立即落盘（与订阅源的增删同一个"明确动作"口径）。 */
+    fun addLlmProfile() {
+        viewModelScope.launch {
+            settingsRepository.addLlmProfile()
+            _uiState.update { it.copy(draft = settingsRepository.snapshot()) }
+        }
+    }
+
+    /** 删除某一份配置。 */
+    fun removeLlmProfile(id: String) {
+        viewModelScope.launch {
+            settingsRepository.removeLlmProfile(id)
+            _uiState.update { it.copy(draft = settingsRepository.snapshot()) }
+        }
+    }
+
+    /** 把某一份挪到最前（设为主用，失败自动切换的首选）。 */
+    fun moveLlmProfileToFront(id: String) {
+        viewModelScope.launch {
+            settingsRepository.moveLlmProfileToFront(id)
+            _uiState.update { it.copy(draft = settingsRepository.snapshot()) }
+        }
+    }
+
+    /** 切换「当前编辑」的那一份（只改 UI 高亮，不动顺序/落盘）。 */
+    fun selectLlmProfile(id: String) {
+        _uiState.update { it.copy(draft = it.draft.copy(llm = it.draft.llm.copy(activeId = id))) }
+    }
+
+    /** 清空接口日志。 */
+    fun clearLog() {
+        viewModelScope.launch { llmCallLog.clear() }
     }
 
     override fun onCleared() {
@@ -297,6 +409,10 @@ class SettingsViewModel(
                     capturedNotificationDao = container.capturedNotificationDao,
                     llmClient = container.llmClient,
                     doubaoTtsClient = container.doubaoTtsClient,
+                    briefUpdateScheduler = container.briefUpdateScheduler,
+                    briefUpdater = container.briefUpdater,
+                    briefAlarmScheduler = container.briefAlarmScheduler,
+                    llmCallLog = container.llmCallLog,
                 )
             }
         }

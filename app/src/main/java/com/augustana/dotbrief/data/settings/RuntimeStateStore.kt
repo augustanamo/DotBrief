@@ -126,6 +126,24 @@ class RuntimeStateStore(
         }
     }
 
+    /**
+     * 记一条"这次某个环节没走通，但内容还是交付了"的说明。
+     *
+     * 与 [setError] 的关键区别：**不动 `WIDGET_STATE`**。
+     * [setError] 会把桌面切到 ERROR，那是对的 —— 那次用户什么都没听见。
+     * 但降级（例如模型限流、退回本地简报）是一条**已经出了声**的路径：
+     * 桌面不该顶着"出错"的脸，否则用户会以为刚才那段话是坏的。
+     *
+     * 说明本身仍旧要留下来：设置页的"最近一次提示"靠它回答
+     * "今天为什么没有新闻快讯"——那种问题从听感上是看不出来的。
+     */
+    suspend fun recordIssue(message: String) {
+        dataStore.edit { prefs ->
+            prefs[RuntimeKeys.LAST_ERROR] = message
+            prefs[RuntimeKeys.LAST_ERROR_AT] = Instant.now().epochSecond.toInt()
+        }
+    }
+
     /** 通知监听服务连通性，由 [com.augustana.dotbrief.data.notification.BriefNotificationListener] 上报。 */
     suspend fun setNotificationListenerConnected(connected: Boolean) {
         dataStore.edit { prefs -> prefs[RuntimeKeys.NOTIFICATION_LISTENER_CONNECTED] = connected }

@@ -13,6 +13,11 @@
          多要一档权限只会让用户在授权弹窗前犹豫。 -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
+    <!-- 点一下小组件给一次短震（约 18ms 的"收到"回执）。
+         这是 normal 权限，装机即授予，不会弹窗；也不需要读取系统的触感设置 ——
+         我们走的是 Vibrator 的直调，不是 View 的 haptic feedback。 -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
     <!-- TTS 前台服务 + 播放中不被打断 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />

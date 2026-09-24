@@ -28,20 +28,29 @@ class SettingsActivity : ComponentActivity() {
             BriefWidgetTheme {
                 val state by viewModel.uiState.collectAsStateWithLifecycle()
                 val runtimeState by viewModel.runtimeState.collectAsStateWithLifecycle()
+                val logEntries by viewModel.logEntries.collectAsStateWithLifecycle()
 
                 SettingsScreen(
                     state = state,
                     runtimeState = runtimeState,
+                    logEntries = logEntries,
                     onChange = viewModel::onChangeDraft,
                     onSave = viewModel::save,
                     onReset = viewModel::reset,
                     onAddFeed = viewModel::addFeed,
                     onRemoveFeed = viewModel::removeFeed,
                     onToggleFeed = viewModel::toggleFeed,
+                    onTogglePresetFeed = viewModel::togglePresetFeed,
                     onPreviewSpeech = viewModel::previewSpeech,
                     onPlayBriefNow = viewModel::playBriefNow,
+                    onUpdateBriefNow = viewModel::updateBriefNow,
                     onStopBrief = viewModel::stopBrief,
                     onProbeLlm = viewModel::probeLlm,
+                    onAddLlmProfile = viewModel::addLlmProfile,
+                    onRemoveLlmProfile = viewModel::removeLlmProfile,
+                    onMoveLlmProfileToFront = viewModel::moveLlmProfileToFront,
+                    onSelectLlmProfile = viewModel::selectLlmProfile,
+                    onClearLog = viewModel::clearLog,
                     onConsumeMessage = viewModel::consumeMessage,
                 )
             }

@@ -17,6 +17,13 @@ import androidx.datastore.preferences.core.stringSetPreferencesKey
 internal object SettingsKeys {
 
     // ---------- 大模型 ----------
+    /**
+     * 多份 AI 配置，整体 JSON 存一个 key（见 [LlmProfiles]）。
+     *
+     * 下面的六个 `LLM_*` 是**旧的单份平铺键**，已废弃：多份支持上线后只做一次性迁移
+     * （读旧键 → 塞进 `profiles[0]` → 删旧键），此后不再读写它们。保留在这里只为迁移能引用。
+     */
+    val LLM_PROFILES_JSON = stringPreferencesKey("llm.profiles_json")
     val LLM_BASE_URL = stringPreferencesKey("llm.base_url")
     val LLM_API_KEY = stringPreferencesKey("llm.api_key")
     val LLM_MODEL = stringPreferencesKey("llm.model")
@@ -31,10 +38,11 @@ internal object SettingsKeys {
 
     // ---------- 语音播报 ----------
     val TTS_PROVIDER = stringPreferencesKey("tts.provider")
-    val TTS_SPEECH_RATE = floatPreferencesKey("tts.speech_rate")
-    val TTS_PITCH = floatPreferencesKey("tts.pitch")
+    // `tts.speech_rate` / `tts.pitch` 已移除（语速音调不再可配，一律原速）。
+    // 设备上可能还残留这两个旧 key，已经没人读它，留着无害，也就不写迁移去清它。
     val TTS_LOCALE_TAG = stringPreferencesKey("tts.locale_tag")
     val TTS_VOICE_NAME = stringPreferencesKey("tts.voice_name")
+    val TTS_BGM_ENABLED = booleanPreferencesKey("tts.bgm_enabled")
 
     /**
      * 已废弃的 Edge-TTS 自建端点（`tts.edge.endpoint` / `tts.edge.voice`）。
@@ -72,9 +80,50 @@ internal object SettingsKeys {
     val WIDGET_ACCENT_CAROUSEL_PACE = stringPreferencesKey("widget.accent_carousel_pace")
 
     // ---------- 简报 ----------
-    val BRIEF_MIN_CHARS = intPreferencesKey("brief.min_chars")
-    val BRIEF_MAX_CHARS = intPreferencesKey("brief.max_chars")
+    /** 篇幅档位，存枚举名（见 [BriefLength]），与 CarouselPace 同一个路子。 */
+    val BRIEF_LENGTH = stringPreferencesKey("brief.length")
     val BRIEF_SOURCES = stringSetPreferencesKey("brief.sources")
+
+    /**
+     * 已废弃的「正文字数下限 / 上限」（`brief.min_chars` / `brief.max_chars`）。
+     *
+     * 两个滑杆换成一档「播报篇幅」之后已经没人读它们了，但会留在老用户的 DataStore 里。
+     * 处理方式与 Edge-TTS 那几个 key 一致：保存配置时顺手删掉（见 `applyUserSettings`），
+     * 不做一次性迁移 —— 它们是两个没人读的整数，不值得为它多一套迁移机制。
+     */
+    val LEGACY_BRIEF_MIN_CHARS = intPreferencesKey("brief.min_chars")
+    val LEGACY_BRIEF_MAX_CHARS = intPreferencesKey("brief.max_chars")
+
+    // ---------- 自动更新 ----------
+    /**
+     * 到点自动刷内容（只生成、不出声）。
+     *
+     * 与 [BRIEF_UPDATE_TIMES] 拆成两个 key 而不是"时刻列表为空即代表关闭"：
+     * 「一个时刻都不设」和「关掉自动更新」在用户心里是两件事，
+     * 而列表为空要表达的是前者（"我只要点的时候才生成"）。
+     */
+    val BRIEF_UPDATE_ENABLED = booleanPreferencesKey("brief.update_enabled")
+
+    /**
+     * 每天刷新的时刻，`10:00` 这种 `HH:mm`，多个用不可见分隔符连成一串。
+     *
+     * ⚠️ 这个 key **存在但为空串**和**不存在**是两种含义：
+     * 前者是用户把时刻全删了（= 不自动刷），后者是没配过（= 用默认的 10/14/19）。
+     * 解码时靠"key 取不到才回落默认值"来区分，别顺手把空串也当成"没配过"。
+     */
+    val BRIEF_UPDATE_TIMES = stringPreferencesKey("brief.update_times")
+
+    // ---------- 定时自动播报 ----------
+    /**
+     * 到点出声播报的开关（与「自动刷新」独立，见 [BriefConfig.alarmEnabled]）。
+     */
+    val BRIEF_ALARM_ENABLED = booleanPreferencesKey("brief.alarm_enabled")
+
+    /**
+     * 每天出声播报的时刻，`HH:mm`，与 [BRIEF_UPDATE_TIMES] 同一套编码（见 SettingsCodec）。
+     * 空串 = 用户没设（不出声）；缺 key = 从没配过，回落到默认（空列表）。
+     */
+    val BRIEF_ALARM_TIMES = stringPreferencesKey("brief.alarm_times")
 
     // ---------- 抓取 ----------
     val CALENDAR_ENABLED = booleanPreferencesKey("ingest.calendar_enabled")
@@ -101,6 +150,9 @@ internal object SettingsKeys {
      * 所以这里补一次：只要那份集合里还没有 WEATHER，就加上它。
      */
     val MIGRATION_WEATHER_SOURCE_V3 = booleanPreferencesKey("migration.weather_source_v3")
+
+    /** 单份大模型配置 -> 多份（`LlmProfiles`）的一次性迁移标记。 */
+    val MIGRATION_LLM_PROFILES = booleanPreferencesKey("migration.llm_profiles")
 }
 
 /** 运行期状态（小组件 UI 状态、最近一次简报、服务连接状态），与用户配置分开存，避免互相覆盖。 */

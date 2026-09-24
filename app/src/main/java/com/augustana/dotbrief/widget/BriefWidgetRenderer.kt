@@ -41,11 +41,21 @@ import com.augustana.dotbrief.tts.BriefPlaybackService
  * ## 三份布局里都没有文字
  *
  * 小组件只有那枚点阵，没有字幕。状态由点阵自己表达：灰=没新东西、彩色=有新内容、
- * 流动=正在念。加一行字是用第二套语言重复同一件事，还占着点阵下沿的位置。
+ * 流动=正在念，而**念过的部分会沿途褪灰**（进度）—— 四个信息各占一条通道，互不重叠。
+ * 加一行字是用第二套语言重复同一件事，还占着点阵下沿的位置。
  */
 object BriefWidgetRenderer {
 
     const val EXTRA_APP_WIDGET_ID = "extra_app_widget_id"
+
+    /**
+     * 标记「这次播报是点桌面小组件触发的」。
+     *
+     * 只用来决定要不要震一下。桌面上点完之后要等一两秒才出声，这中间没有任何反馈，
+     * 用户会怀疑没点到而再点一次 —— 而第二下正好是「打断」。一次短震就能把这个来回消掉。
+     * 设置页里的按钮不带这个标记：那里的人正盯着屏幕，震动纯属多余。
+     */
+    const val EXTRA_FROM_WIDGET = "extra_from_widget"
 
     private const val REQUEST_TOGGLE = 0x1001
     private const val DEFAULT_SIZE_DP = 110
@@ -138,7 +148,8 @@ object BriefWidgetRenderer {
         context,
         REQUEST_TOGGLE,
         Intent(context, BriefPlaybackService::class.java)
-            .setAction(BriefPlaybackService.ACTION_TOGGLE),
+            .setAction(BriefPlaybackService.ACTION_TOGGLE)
+            .putExtra(EXTRA_FROM_WIDGET, true),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 

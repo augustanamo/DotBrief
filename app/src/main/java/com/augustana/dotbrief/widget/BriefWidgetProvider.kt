@@ -135,6 +135,46 @@ class BriefWidgetProvider : AppWidgetProvider() {
         }
 
         /**
+         * 推进点阵上的**播报进度**（0..1），点阵已念过的部分随之褪灰。
+         *
+         * 只做两件事：把值写进进程内的 [BriefProgress]，然后请桌面重取动画帧
+         * （帧工厂画帧时会读那个值）。**不重建 RemoteViews** —— 播报中布局没有变，
+         * 变的只是帧里的颜色，重建整份 RemoteViews 属于白干。
+         *
+         * 节流在这里做，是因为只有这一层知道"值到底动没动"：
+         * 调用方是每秒都在跑的 ticker，而 1% 的差别肉眼根本看不出来，
+         * 每 1% 都去跨进程通知桌面重画 14~56 张位图，是拿电换一个看不见的变化。
+         *
+         * 单调递增（`next <= before` 直接返回）：进度不该倒退，
+         * 而"复位"有专门的 [resetProgress]，不走这里 —— 那条路上没有 flipper 可以通知。
+         */
+        fun applyProgress(context: Context, progress: Float) {
+            val next = progress.coerceIn(0f, 1f)
+            if (next <= BriefProgress.value) return
+            BriefProgress.set(next)
+
+            val manager = AppWidgetManager.getInstance(context)
+            val ids = manager.getAppWidgetIds(
+                ComponentName(context, BriefWidgetProvider::class.java),
+            )
+            if (ids.isEmpty()) return
+            manager.notifyAppWidgetViewDataChanged(ids, R.id.widget_flipper)
+        }
+
+        /**
+         * 进度归零。
+         *
+         * 必须在两个时刻调用，且**顺序很要紧**：
+         * - 起播：先复位再 [applyState]（切到 playing 布局）—— 否则桌面绑定 adapter 的瞬间
+         *   会拿上一轮的残留进度画出第一帧，看起来像"刚点就已经念了一半"；
+         * - 收播：先 [applyState]（切回静态布局）再复位 —— 那时 flipper 已经不在了，
+         *   对着一个不存在的 view 调 data-changed 只会让系统白跑一趟并打 warning。
+         */
+        fun resetProgress() {
+            BriefProgress.reset()
+        }
+
+        /**
          * 让桌面重新领一份 RemoteViews。
          *
          * ## 为什么必须有这个入口
@@ -181,6 +221,9 @@ class BriefWidgetProvider : AppWidgetProvider() {
          * 这一步要查一次通知库，只有挂起环境里做得了，所以不能塞进 `toRuntimeState()`。
          * 查库失败会退回"没有新内容"（[BriefFreshness] 内部已经兜住），
          * 于是最坏情况是点阵安静着 —— 比顶着一个假的"有新消息"体面。
+         *
+         * 两个时间戳一起传：定时刷新出来的正文也算"没听过的新内容"，
+         * 否则后台把内容更新了，桌面却还是灰的（见 [BriefFreshness] 的说明）。
          */
         private suspend fun withFreshness(
             app: BriefWidgetApp,
@@ -189,6 +232,7 @@ class BriefWidgetProvider : AppWidgetProvider() {
             unheard = BriefFreshness.resolve(
                 dao = app.container.capturedNotificationDao,
                 lastHeardAtEpochSeconds = runtime.lastHeardAtEpochSeconds,
+                lastBriefAtEpochSeconds = runtime.lastBriefAtEpochSeconds,
             ),
         )
 

@@ -28,7 +28,9 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -540,6 +542,11 @@ private val SLIDER_THUMB_RADIUS = 5.dp
  * - 纵向位移超过 touchSlop → 判定为"翻页"，直接放手，一次值都不改；
  * - 整个过程中位移都没超过 touchSlop 就松手 → 视为轻点，这时才允许直接跳值
  *   （保留 Material 那种"点哪跳哪"的顺手感）。
+ *
+ * ## 取值必须现取
+ *
+ * 手势块里**不能直接捕获回调**，只能经 `rememberUpdatedState` 读最新那一份 ——
+ * 原因写在函数体里那处注释。这是本文件最容易再犯一次的坑。
  */
 @Composable
 fun NothingSlider(
@@ -553,6 +560,18 @@ fun NothingSlider(
 ) {
     val span = (valueRange.endInclusive - valueRange.start).let { if (it > 0f) it else 1f }
     val fraction = ((value - valueRange.start) / span).coerceIn(0f, 1f)
+
+    // ⚠️ 手势块里必须**现取**回调，不能直接捕获它。
+    //
+    // `pointerInput` 的 key（这里是 valueRange / steps）没变时，它不会重启手势循环，
+    // 块里拿到的一直是**当初那次组合**的参数 —— 包括捕获在这个回调里的整个 draft。
+    // 于是"调完甲、乙跳回原值"：拖鲜艳度用的还是几分钟前的色相快照，顺手把色相打回原值；
+    // 反过来拖色相又会把鲜艳度打回去。设置页任何"同一份 draft 上并排两个滑杆"的地方
+    // （简报篇幅、日程预读时长……）都会这样，所以修在这一层。
+    //
+    // 判据：拖动本身是正常的（说明循环没被重启），只有**跨手势**取值会过期 ——
+    // 若循环真的随每次重组合重启，拖动会在第二个事件就断掉，那种症状一眼就能看出来。
+    val currentOnValueChange by rememberUpdatedState(onValueChange)
 
     Box(
         modifier = modifier
@@ -594,7 +613,7 @@ fun NothingSlider(
                         }
 
                         if (owned) {
-                            onValueChange(valueAt(x))
+                            currentOnValueChange(valueAt(x))
                             if (change.pressed) change.consume()
                         }
 
@@ -602,7 +621,7 @@ fun NothingSlider(
                             if (owned) {
                                 change.consume()
                             } else if (!abandoned) {
-                                onValueChange(valueAt(x))
+                                currentOnValueChange(valueAt(x))
                                 change.consume()
                             }
                             break

@@ -1,6 +1,7 @@
 package com.augustana.dotbrief.data.settings
 
 import kotlinx.serialization.Serializable
+import java.time.LocalTime
 
 /**
  * 单条 RSS / Atom 订阅源配置。
@@ -14,6 +15,17 @@ data class RssFeed(
     val name: String,
     val url: String,
     val enabled: Boolean = true,
+)
+
+/**
+ * 推荐源目录里的一个分组：同类源归在一起，设置页按组渲染小标题。
+ *
+ * 与 [RssFeed] 的区别：这只是"可勾选的候选清单"的分组标签，不带"启用"语义。
+ * 用户的实际 feeds 列表才是数据来源（见 `SettingsScreen` 的 `RssSection`）。
+ */
+data class RssCatalogGroup(
+    val title: String,
+    val feeds: List<RssFeed>,
 )
 
 /**
@@ -118,7 +130,11 @@ enum class BriefSource {
 }
 
 /** 大模型接口配置，兼容 OpenAI 标准协议。 */
+@kotlinx.serialization.Serializable
 data class LlmConfig(
+    /** 稳定标识，用于「当前使用哪一份」的引用，不随用户改内容而变。 */
+    val id: String = "",
+    val name: String = "",
     val baseUrl: String = Defaults.LLM_BASE_URL,
     val apiKey: String = "",
     val model: String = Defaults.LLM_MODEL,
@@ -129,7 +145,51 @@ data class LlmConfig(
     /** 三个关键项齐全才算配置可用，设置页据此给出提示。 */
     val isReady: Boolean
         get() = baseUrl.isNotBlank() && apiKey.isNotBlank() && model.isNotBlank()
+
+    /** 列表里展示的标题：优先用用户起的名字，没起就用「模型名 @ 服务商」。 */
+    fun displayName(): String = when {
+        name.isNotBlank() -> name
+        model.isNotBlank() && baseUrl.isNotBlank() -> {
+            val host = runCatching {
+                java.net.URI(baseUrl.trimEnd('/')).host.orEmpty()
+            }.getOrDefault("")
+            if (host.isNotBlank()) "$model @ $host" else model
+        }
+        else -> "未命名配置"
+    }
 }
+
+/**
+ * 多份 AI 配置的聚合：一份有序列表 + 一个「当前使用」的引用。
+ *
+ * ## 为什么整体存一个 JSON key
+ *
+ * 参照 [RssFeed] 已经踩通的路子：配置份数是「整体增删改」的小集合，
+ * 拆成多 key 反而难保原子性（增删一份要动好几个 key）。
+ *
+ * ## 「当前使用」是 [activeId]，而不是列表第 0 项
+ *
+ * 因为「失败自动切换」的语义是**按顺序回退**：第 0 项是首选，失败试下一份。
+ * 用户想"换一个主用"，本质是**把那一份挪到最前**（或调整顺序），
+ * 而不是单独改一个布尔开关 —— 那样顺序和"当前"两套状态会打架。
+ * [activeId] 只用于**设置页高亮显示当前编辑的那一份**，生成链路认的是列表顺序。
+ */
+@kotlinx.serialization.Serializable
+data class LlmProfiles(
+    val profiles: List<LlmConfig> = listOf(LlmConfig()),
+    val activeId: String = "",
+) {
+    /** 有没有至少一份填全了关键项 —— 决定"要不要走模型"（否则退本地简报）。 */
+    val anyReady: Boolean get() = profiles.any { it.isReady }
+
+    /** 「当前使用」的那一份；引用丢了（被删/空）就回落列表第一份。 */
+    val active: LlmConfig
+        get() = profiles.firstOrNull { it.id == activeId } ?: profiles.firstOrNull() ?: LlmConfig()
+
+    /** 生成时的首选（列表第一份）。「失败自动切换」按 [profiles] 顺序回退。 */
+    val primary: LlmConfig get() = profiles.firstOrNull() ?: LlmConfig()
+}
+
 
 /** 新闻流配置。 */
 data class RssConfig(
@@ -141,11 +201,20 @@ data class RssConfig(
 /** 语音播报配置。 */
 data class TtsConfig(
     val provider: TtsProvider = TtsProvider.SYSTEM,
-    val speechRate: Float = Defaults.TTS_SPEECH_RATE,
-    val pitch: Float = Defaults.TTS_PITCH,
+    // 这里曾有过 speechRate / pitch 两个字段，对应设置页那两个滑块，现已移除。
+    // 原因不是"简化 UI"，而是这两个值**用户调完之后就失去了可见性**：
+    // 界面上只显示一个数字，"2.0X" 看不出异常，可语速确实快了一倍。
+    // 现在语音一律按原速合成，两个引擎都不再接受外部倍率。
     val localeTag: String = Defaults.TTS_LOCALE_TAG,
     /** 为空表示跟随系统语言，不做语音包指定。 */
     val voiceName: String = "",
+    /**
+     * 播报时垫一层背景音乐（`res/raw/bgm.mp3`）。
+     *
+     * 两个作用，见 `BgmPlayer` 的说明：等待模型的那几秒先放音乐（那段原来是完全静默的），
+     * 真正开口后压到垫底音量。关掉则整段都不放，回到纯粹的语音播报。
+     */
+    val bgmEnabled: Boolean = Defaults.TTS_BGM_ENABLED,
 
     // ---------- 豆包（火山引擎 · 语音技术） ----------
     /**
@@ -171,11 +240,72 @@ data class TtsConfig(
         get() = doubaoApiKey.isNotBlank() && doubaoSpeaker.isNotBlank()
 }
 
+/**
+ * 简报的篇幅档位。
+ *
+ * ## 为什么按"时长"而不是"字数"
+ *
+ * 这里原本并排两个滑杆：「正文字数下限」「正文字数上限」。用户看到的第一反应是
+ * "为啥要限制什么正文" —— 那两个数字回答不了他真正关心的问题：250 字是多长？
+ * 下限又是干什么用的？而这段字是**要念出来的**，有意义的单位是时间。
+ * 所以现在按"念多久"给三档，字数只是它的实现细节（中文 TTS 大约每分钟 250 字）。
+ *
+ * ## 下限从"配额"降级成"上限为准"
+ *
+ * 下限本来是为了保证简报有分量，代价却是素材少的时候逼模型注水
+ * （"今天很平静，暂时没有安排，祝你有美好的一天"这种话循环三遍）。
+ * 现在提示词里**上限是硬约束**，下限只是"素材够的时候大约写到这儿" ——
+ * 宁可三十秒说完，也不要为凑长度重复。
+ */
+enum class BriefLength(val minChars: Int, val maxChars: Int) {
+    /** 约 30 秒。 */
+    SHORT(80, 130),
+
+    /** 约 1 分钟（默认，与改动前的 150–250 字一致）。 */
+    STANDARD(150, 250),
+
+    /** 约 2 分钟。 */
+    LONG(320, 450),
+}
+
 /** 简报正文的生成规则。 */
 data class BriefConfig(
-    val minChars: Int = Defaults.BRIEF_MIN_CHARS,
-    val maxChars: Int = Defaults.BRIEF_MAX_CHARS,
+    /** 篇幅档位：决定这段话说多久。 */
+    val length: BriefLength = Defaults.BRIEF_LENGTH,
     val sources: Set<BriefSource> = Defaults.BRIEF_SOURCES,
+
+    /** 到点自动刷新内容（只生成、不出声）。 */
+    val updateEnabled: Boolean = Defaults.BRIEF_UPDATE_ENABLED,
+
+    /**
+     * 每天自动刷新的时刻。
+     *
+     * 它同时决定"点击时要不要重新请求模型"：落在最近一个**已过**时刻之后的那份内容
+     * 被视为新鲜，点击时直接念出来；否则才现场生成。所以这张表改的是**两个**行为 ——
+     * 什么时候后台刷新、以及一天最多请求几次模型。
+     *
+     * 空列表 = 只在用户点的时候生成（自动更新那一档就变成摆设，见设置页的提示）。
+     */
+    val updateTimes: List<LocalTime> = Defaults.BRIEF_UPDATE_TIMES,
+
+    /**
+     * 定时自动播报（当闹钟用）。
+     *
+     * 与 [updateEnabled] / [updateTimes] 是**两回事**：那套是"到点只把内容刷好、不出声"，
+     * 这套是"到点**出声**把简报念出来"。所以开关和时刻表都独立存，互不影响。
+     *
+     * 到点的行为见 [com.augustana.dotbrief.data.update.BriefAlarmWorker]：
+     * 缓存 ≤4 小时就直接念现成的，否则先刷新再念，保证听到的不是昨晚的旧内容。
+     */
+    val alarmEnabled: Boolean = Defaults.BRIEF_ALARM_ENABLED,
+
+    /**
+     * 每天出声播报的时刻（`HH:mm`）。
+     *
+     * 默认**空**：出声是打扰性动作，不该由默认值替用户决定每天几点被吵醒，
+     * 得他主动加一个时刻（如早上 7:00）才生效。
+     */
+    val alarmTimes: List<LocalTime> = Defaults.BRIEF_ALARM_TIMES,
 )
 
 /** 数据抓取（Phase 2）相关配置。 */
@@ -197,7 +327,7 @@ data class IngestConfig(
  * DataStore 里缺 key 时会自然回落到默认值，无需写迁移。
  */
 data class UserSettings(
-    val llm: LlmConfig = LlmConfig(),
+    val llm: LlmProfiles = LlmProfiles(),
     val rss: RssConfig = RssConfig(),
     val tts: TtsConfig = TtsConfig(),
     val brief: BriefConfig = BriefConfig(),

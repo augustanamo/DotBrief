@@ -5,38 +5,40 @@ import android.speech.tts.TextToSpeech
 import java.util.Locale
 
 /**
- * 设置页的"试听"能力：用系统 TTS 念一句话，让用户立刻听到当前语速/音调的效果。
+ * 设置页的"试听"能力：用系统 TTS 念一句话，让用户立刻听到这个引擎的声音。
  *
- * 与 Phase 3 的 BriefTtsService 的分工：
+ * 它验证的是**配置**（语音包装没装、发音人能不能用、Key 对不对），
+ * 不是"参数效果" —— 语速与音调已经不是设置项，这里固定按引擎默认值念。
+ *
+ * 与 BriefPlaybackService 的分工：
  * - 这里是**短命的一次性引擎**，只服务设置页，ViewModel 销毁时释放；
  * - 不做音频焦点与前台上报（设置页本身就在前台，用户正看着屏幕）。
- * 但两者共享同一套参数来源：[com.augustana.dotbrief.data.settings.TtsConfig]。
  */
 class TtsPreviewPlayer(private val context: Context) {
 
-    private data class Request(val text: String, val rate: Float, val pitch: Float)
-
     private var engine: TextToSpeech? = null
     private var ready: Boolean = false
-    private var pending: Request? = null
+
+    /** 引擎还没就绪时先记下要念的这句，onInit 回来后补播。 */
+    private var pending: String? = null
 
     /** 引擎是否已初始化完成（初始化是异步的）。 */
     val isReady: Boolean get() = ready
 
     /**
-     * 播报一段文本。
+     * 念一段文本。
      * 引擎首次创建是异步的，所以这里做了排队：第一次点试听时引擎可能还没 onInit，
      * 等初始化完成后会自动补播，避免"第一次点没反应"。
      */
-    fun speak(text: String, rate: Float, pitch: Float) {
+    fun speak(text: String) {
         if (text.isBlank()) return
 
         val tts = ensureEngine()
         if (tts == null || !ready) {
-            pending = Request(text, rate, pitch)
+            pending = text
             return
         }
-        speakInternal(tts, text, rate, pitch)
+        speakInternal(tts, text)
     }
 
     /**
@@ -74,8 +76,8 @@ class TtsPreviewPlayer(private val context: Context) {
             val tts = created ?: return@TextToSpeech
             tts.setLanguage(Locale.SIMPLIFIED_CHINESE)
 
-            pending?.let { request ->
-                speakInternal(tts, request.text, request.rate, request.pitch)
+            pending?.let { text ->
+                speakInternal(tts, text)
                 pending = null
             }
         }
@@ -83,19 +85,14 @@ class TtsPreviewPlayer(private val context: Context) {
         return created
     }
 
-    private fun speakInternal(tts: TextToSpeech, text: String, rate: Float, pitch: Float) {
-        tts.setSpeechRate(rate.coerceIn(MIN_RATE, MAX_RATE))
-        tts.setPitch(pitch.coerceIn(MIN_PITCH, MAX_PITCH))
+    private fun speakInternal(tts: TextToSpeech, text: String) {
+        // 有意不调 setSpeechRate / setPitch：让引擎用默认值（原速、原调），
+        // 与 BriefPlaybackService 里正式播报的做法完全一致 ——
+        // 试听听到的就是实际播报的声音，否则这个按钮又变成骗人的。
         tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, UTTERANCE_ID)
     }
 
     companion object {
         private const val UTTERANCE_ID = "brief-settings-preview"
-
-        // 系统 TTS 的合理区间：超出这个范围要么听不清要么明显失真
-        const val MIN_RATE = 0.5f
-        const val MAX_RATE = 2.0f
-        const val MIN_PITCH = 0.5f
-        const val MAX_PITCH = 2.0f
     }
 }

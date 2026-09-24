@@ -20,6 +20,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.doubleOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.LocalTime
 import java.util.Locale
 import java.util.concurrent.TimeUnit
@@ -44,6 +46,12 @@ import kotlin.math.roundToInt
  * 代价是它**可能取不到**：新手机、刚开机、从不定位的用户都可能没有已知位置。
  * 所以失败一律静默降级成"这次没有天气"，绝不因此让整条简报失败 ——
  * 少说一句天气，比点了不出声好得多。
+ *
+ * ## 一次取两天
+ *
+ * 白天只用今天的数字，但**明天那份也一起取回来**：入夜之后要改说明天的天气
+ * （见 [DayPart]）。等 17 点再发一次请求，要么让"点一下立刻出声"白等一个网络往返，
+ * 要么得回头改写已经生成好的简报。多取一天几乎不增加成本，却把这件事整个变简单了。
  */
 class WeatherSource(private val context: Context) {
 
@@ -123,14 +131,18 @@ class WeatherSource(private val context: Context) {
         // 四位小数（约 10 米）远超需求，但它是"这个点"的完整表达，坐标反正是本机算的
         append("?latitude=").append(String.format(Locale.US, "%.4f", location.latitude))
         append("&longitude=").append(String.format(Locale.US, "%.4f", location.longitude))
-        // current 给"现在多少度"，hourly 给"几点会下雨"，daily 给今天的高低温/紫外线/日出日落
+        // current 给"现在多少度"，hourly 给"几点会下雨"，daily 给高低温/紫外线/日出日落
         append("&current=temperature_2m,weather_code")
         append("&hourly=precipitation_probability")
+        // daily 里的 weather_code 是给**明天**用的：今天的现象 current 已经给了，
+        // 而夜里要念"明天什么天气"，只能从这里取。
         append(
-            "&daily=temperature_2m_max,temperature_2m_min," +
+            "&daily=weather_code,temperature_2m_max,temperature_2m_min," +
                 "precipitation_probability_max,uv_index_max,sunrise,sunset",
         )
-        append("&timezone=auto&forecast_days=1")
+        // 两天：今天 + 明天。白天的简报只用得上今天那份，但明天那份必须提前取回来 ——
+        // 等 17 点之后才发现没取，就得再发一次请求（见 WeatherInfo.tomorrow 的说明）。
+        append("&timezone=auto&forecast_days=2")
     }
 
     private fun airEndpoint(location: Location): String = buildString {
@@ -174,29 +186,28 @@ class WeatherSource(private val context: Context) {
         // 除"现在多少度"之外的东西都算锦上添花：缺了退回保守值就好，
         // 绝不该让整条天气作废 —— 少说一句，比一条天气都没有强。
         val daily = root["daily"] as? JsonObject
-        val high = daily?.get("temperature_2m_max")?.let(::firstNumber) ?: temperature
-        val low = daily?.get("temperature_2m_min")?.let(::firstNumber) ?: temperature
-        val rain = daily?.get("precipitation_probability_max")?.let(::firstNumber)
+        val hourly = root["hourly"] as? JsonObject
+
+        // 取数时刻既用来算"今天剩下来的雨点"，也随数据一起交出去 ——
+        // 防晒提醒只在这个点还来得及的时候才说（见 WeatherInfo.uvNeedsCare）。
+        val now = LocalDateTime.now()
+        val high = numberAt(daily?.get("temperature_2m_max"), TODAY) ?: temperature
+        val low = numberAt(daily?.get("temperature_2m_min"), TODAY) ?: temperature
+        val rain = numberAt(daily?.get("precipitation_probability_max"), TODAY)
 
         WeatherInfo(
             condition = conditionOf(code),
             temperature = temperature.roundToInt(),
             high = high.roundToInt(),
             low = low.roundToInt(),
-            rainAtText = firstRainAt(root["hourly"] as? JsonObject),
+            tomorrow = tomorrowFrom(daily, hourly, includeSunTimes, now),
+            rainAtText = firstRainAt(hourly, now.toLocalDate()),
             precipitationProbability = rain?.roundToInt()?.coerceIn(0, 100),
-            uvIndex = daily?.get("uv_index_max")?.let(::firstNumber)?.roundToInt(),
+            uvIndex = numberAt(daily?.get("uv_index_max"), TODAY)?.roundToInt(),
+            fetchedAtHour = now.hour,
             // 日出日落按需解析：不报的那几次，连字段都不去读
-            sunriseText = if (includeSunTimes) {
-                (daily?.get("sunrise")?.let(::firstString))?.let(::speakableTimeOfDay)
-            } else {
-                null
-            },
-            sunsetText = if (includeSunTimes) {
-                (daily?.get("sunset")?.let(::firstString))?.let(::speakableTimeOfDay)
-            } else {
-                null
-            },
+            sunriseText = if (includeSunTimes) sunTextAt(daily, TODAY, "sunrise") else null,
+            sunsetText = if (includeSunTimes) sunTextAt(daily, TODAY, "sunset") else null,
         )
     }.onFailure { Log.w(TAG, "解析天气响应失败", it) }.getOrNull()
 
@@ -207,30 +218,39 @@ class WeatherSource(private val context: Context) {
     }.onFailure { Log.w(TAG, "解析空气质量失败", it) }.getOrNull()
 
     /**
-     * 今天剩下来的时间里第一个"可能要下雨"的整点，已经口语化。
+     * 某一天里第一个"可能要下雨"的整点，已经口语化。
      *
-     * 从**下一个整点**开始找：当前正在下雨这件事 `weather_code` 已经说了
+     * [targetDate] 决定报哪一天的雨：白天报今天，入夜之后报明天。
+     *
+     * 必须按**日期**卡住：以前只取一天的数据，从下一个整点往后扫就行；
+     * 现在一次取两天，不卡日期就会把"明天晚上有雨"当成今天报出来。
+     *
+     * 同一天里跳过已经过去的整点：正在下雨这件事 `weather_code` 已经说了
      * （"小雨""阵雨"），再补一句"现在前后有雨"是同一件事说两遍。
      *
      * 阈值 50%：低于它提醒带伞属于大惊小怪，而"带伞"这句话说多了就没人听了。
      */
-    private fun firstRainAt(hourly: JsonObject?): String? {
+    private fun firstRainAt(hourly: JsonObject?, targetDate: LocalDate): String? {
         val probabilities = hourly?.get("precipitation_probability") as? JsonArray ?: return null
         val times = hourly["time"] as? JsonArray ?: return null
         val nowHour = LocalTime.now().hour
+        val today = LocalDate.now()
 
         probabilities.forEachIndexed { index, element ->
             val probability = (element as? JsonPrimitive)?.doubleOrNull ?: return@forEachIndexed
             if (probability < RAIN_LIKELY_PERCENT) return@forEachIndexed
 
-            // time 的格式是 "2026-09-23T15:00"，取 T 后面两位就是小时
-            val hour = (times.getOrNull(index) as? JsonPrimitive)?.content
-                ?.substringAfter('T', "")
-                ?.take(2)
-                ?.toIntOrNull()
+            // time 的格式是 "2026-09-23T15:00"
+            val stamp = (times.getOrNull(index) as? JsonPrimitive)?.content ?: return@forEachIndexed
+            val date = stamp.substringBefore('T', "")
+                .takeIf { it.length == DATE_LENGTH }
+                ?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
                 ?: return@forEachIndexed
+            if (date != targetDate) return@forEachIndexed
 
-            if (hour > nowHour) return speakableHour(hour)
+            val hour = stamp.substringAfter('T', "").take(2).toIntOrNull() ?: return@forEachIndexed
+            if (date == today && hour <= nowHour) return@forEachIndexed
+            return speakableHour(hour)
         }
         return null
     }
@@ -250,17 +270,59 @@ class WeatherSource(private val context: Context) {
     private fun number(element: JsonElement): Double? =
         (element as? JsonPrimitive)?.doubleOrNull
 
-    /** 取数组第一项（`forecast_days=1`，今天那一项就是唯一一项）。 */
-    private fun firstNumber(element: JsonElement): Double? {
-        val array = element as? JsonArray ?: return number(element)
-        return array.firstOrNull()?.let(::number)
+    /**
+     * 取 `daily` 数组里第 [index] 天的一个数字（[TODAY] = 0，[TOMORROW] = 1）。
+     *
+     * 字段本身不是数组时按"这就是今天那一项"处理：只是多一层容错，
+     * 别在接口偶尔换了形状时把整条天气都丢掉。
+     */
+    private fun numberAt(element: JsonElement?, index: Int): Double? {
+        element ?: return null
+        val array = element as? JsonArray ?: return if (index == TODAY) number(element) else null
+        return array.getOrNull(index)?.let(::number)
     }
 
     /** 同上，但取字符串（日出日落是 ISO 时间字符串，不是数字）。 */
-    private fun firstString(element: JsonElement): String? {
-        val array = element as? JsonArray ?: return (element as? JsonPrimitive)?.content
-        return (array.firstOrNull() as? JsonPrimitive)?.content
+    private fun stringAt(element: JsonElement?, index: Int): String? {
+        element ?: return null
+        val array = element as? JsonArray
+            ?: return if (index == TODAY) (element as? JsonPrimitive)?.content else null
+        return (array.getOrNull(index) as? JsonPrimitive)?.content
     }
+
+    /**
+     * 明天的预报。取不到（接口没给第二天、或字段缺项）就返回 null。
+     *
+     * 温度和天气现象**缺一不可**：只说"明天多云"却报不出温度，那句话没有行动价值 ——
+     * 与其念半句，不如让上游退回说今天那一组数字。
+     */
+    private fun tomorrowFrom(
+        daily: JsonObject?,
+        hourly: JsonObject?,
+        includeSunTimes: Boolean,
+        now: LocalDateTime,
+    ): DayForecast? {
+        daily ?: return null
+        val code = numberAt(daily["weather_code"], TOMORROW)?.roundToInt() ?: return null
+        val high = numberAt(daily["temperature_2m_max"], TOMORROW) ?: return null
+        val low = numberAt(daily["temperature_2m_min"], TOMORROW) ?: return null
+
+        return DayForecast(
+            condition = conditionOf(code),
+            high = high.roundToInt(),
+            low = low.roundToInt(),
+            rainAtText = firstRainAt(hourly, now.toLocalDate().plusDays(1)),
+            precipitationProbability = numberAt(daily["precipitation_probability_max"], TOMORROW)
+                ?.roundToInt()
+                ?.coerceIn(0, 100),
+            sunriseText = if (includeSunTimes) sunTextAt(daily, TOMORROW, "sunrise") else null,
+            sunsetText = if (includeSunTimes) sunTextAt(daily, TOMORROW, "sunset") else null,
+        )
+    }
+
+    /** `daily` 里的日出 / 日落，取出来就已经是口语（"凌晨5点42分"）。 */
+    private fun sunTextAt(daily: JsonObject?, index: Int, key: String): String? =
+        stringAt(daily?.get(key), index)?.let(::speakableTimeOfDay)
 
     private companion object {
         const val TAG = "WeatherSource"
@@ -273,6 +335,13 @@ class WeatherSource(private val context: Context) {
 
         /** 小时级降水概率到这个数才值得提醒带伞。 */
         const val RAIN_LIKELY_PERCENT = 50
+
+        /** `daily` 里的今天 / 明天：`forecast_days=2` 就是从今天开始的两项。 */
+        const val TODAY = 0
+        const val TOMORROW = 1
+
+        /** "2026-09-23" 的长度，用来判断时间串里到底有没有日期部分。 */
+        const val DATE_LENGTH = 10
 
 
         /**

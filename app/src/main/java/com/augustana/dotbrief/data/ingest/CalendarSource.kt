@@ -11,6 +11,12 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 
+/** 命中任一关键字且为全天事件，才判定为「节日」（见 [CalendarSource.upcomingFestivals]）。 */
+private val FESTIVAL_KEYWORDS = listOf(
+    "节", "新年", "元旦", "除夕", "春节", "端午", "中秋", "清明", "国庆",
+    "圣诞", "元宵", "重阳", "七夕", "腊八", "情人节", "儿童节", "妇女节", "劳动节",
+)
+
 /**
  * 日程取数：读系统日历（CalendarContract.Instances）。
  *
@@ -83,6 +89,87 @@ class CalendarSource(private val context: Context) {
                                     ((startMs - begin) / 60_000L).toInt(),
                                 location = cursor.getString(locationIndex).orEmpty(),
                                 allDay = allDay,
+                            ),
+                        )
+                    }
+                }
+            }
+        }.getOrNull().orEmpty()
+
+        return rows
+    }
+
+    /**
+     * 取从现在起到未来 [days] 天内的「节日」。
+     *
+     * ## 为什么单开一个方法、而不是并进 [upcoming]
+     *
+     * [upcoming] 查的是"未来几小时"，而节日（中秋、国庆……）往往在**几天之后**，
+     * 窗口对不上；而且节日要的是"还有几天"这种**倒计时**口径，日程要的是"几点开始"，
+     * 两种语义不该挤在一条查询里。
+     *
+     * ## 节日在系统日历里长什么样
+     *
+     * 手机日历里显示的节日，多半来自厂商预置的"中国节假日"订阅，它们是**全天事件**，
+     * 标题就是节日名（"中秋节""国庆节"）。所以这里的判据是：
+     * 全天 + 标题命中 [FESTIVAL_KEYWORDS]。
+     *
+     * ## 会不会把"出差""休假"误判成节日
+     *
+     * 不会：那些全天日程的标题不含"节/新年/圣诞"这类词。而"国庆节""中秋节"这种
+     * 命中关键词的，几乎只可能是真节日。识别偏保守（漏一个不常见的节日 > 把出差念成节日）。
+     */
+    fun upcomingFestivals(days: Int, limit: Int = 3): List<Festival> {
+        if (!hasPermission()) return emptyList()
+
+        val zone = ZoneId.systemDefault()
+        val now = LocalDateTime.now(zone)
+        val begin = now.atZone(zone).toInstant().toEpochMilli()
+        val end = now.plusDays(days.toLong()).atZone(zone).toInstant().toEpochMilli()
+
+        val uri = CalendarContract.Instances.CONTENT_URI.buildUpon().also {
+            ContentUris.appendId(it, begin)
+            ContentUris.appendId(it, end)
+        }.build()
+
+        val projection = arrayOf(
+            CalendarContract.Instances.TITLE,
+            CalendarContract.Instances.BEGIN,
+            CalendarContract.Instances.ALL_DAY,
+        )
+
+        val rows = runCatching {
+            context.contentResolver.query(
+                uri,
+                projection,
+                null,
+                null,
+                CalendarContract.Instances.BEGIN + " ASC",
+            )?.use { cursor ->
+                val titleIndex = cursor.getColumnIndexOrThrow(CalendarContract.Instances.TITLE)
+                val beginIndex = cursor.getColumnIndexOrThrow(CalendarContract.Instances.BEGIN)
+                val allDayIndex = cursor.getColumnIndexOrThrow(CalendarContract.Instances.ALL_DAY)
+
+                buildList {
+                    while (cursor.moveToNext() && size < limit) {
+                        if (cursor.getInt(allDayIndex) != 1) continue
+                        val title = cursor.getString(titleIndex)?.trim()?.takeIf { it.isNotBlank() }
+                            ?: continue
+                        if (FESTIVAL_KEYWORDS.none { it in title }) continue
+
+                        val startMs = cursor.getLong(beginIndex)
+                        val date = LocalDateTime.ofInstant(
+                            Instant.ofEpochMilli(startMs),
+                            zone,
+                        ).toLocalDate()
+                        val daysFromNow = (date.toEpochDay() - now.toLocalDate().toEpochDay()).toInt()
+                        // 已经过去的（今天之前的）不算"还有几天"
+                        if (daysFromNow < 0) continue
+
+                        add(
+                            Festival(
+                                title = title,
+                                daysFromNow = daysFromNow,
                             ),
                         )
                     }

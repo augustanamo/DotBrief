@@ -7,7 +7,11 @@ plugins {
 
 android {
     namespace = "com.augustana.dotbrief"
-    compileSdk = 34
+    // 本机只装了 platforms;android-36，故用 36 编译；targetSdk 仍是 34，运行时行为不变。
+    // AGP 8.5.2 只测到 compileSdk 34，会有一条"建议升级 AGP"的警告，不影响产物。
+    compileSdk = 36
+    // AGP 8.5.2 默认索要 build-tools 34.0.0（本机没装），显式指向已装的 35.0.0。
+    buildToolsVersion = "35.0.0"
 
     defaultConfig {
         applicationId = "com.augustana.dotbrief"

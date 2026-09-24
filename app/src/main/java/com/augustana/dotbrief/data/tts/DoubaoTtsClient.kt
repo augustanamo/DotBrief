@@ -87,8 +87,9 @@ class DoubaoTtsClient {
                         buildJsonObject {
                             put("format", "mp3")
                             put("sample_rate", SAMPLE_RATE)
-                            // 服务端吃整数百分比 [-50, 100]，而我们的配置是倍率（1.0 = 原速）
-                            put("speech_rate", rateToPercent(config.speechRate))
+                            // 一律原速：服务端吃整数百分比，0 = 不加速也不减速。
+                            // （倍率 -> 百分比的换算随 speechRate 字段一起删了。）
+                            put("speech_rate", 0)
                         },
                     )
                 },
@@ -227,7 +228,8 @@ class DoubaoTtsClient {
         val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
         /** 倍率 -> 百分比整数。1.0 -> 0，1.5 -> 50，0.5 -> -50。 */
-        fun rateToPercent(rate: Float): Int = ((rate - 1f) * 100f).toInt().coerceIn(-50, 100)
+        // rateToPercent 已删除：语音一律原速（请求里固定 speech_rate = 0），
+        // 客户端不再有"倍率"这个概念，留着换算函数只会让人以为语速还能配。
 
         fun JsonObject.codeOrNull(): Int? =
             this["code"]?.jsonPrimitive?.content?.toIntOrNull()

@@ -72,6 +72,7 @@ class SettingsRepository(
         dataStore.edit { prefs ->
             migrateLlmTimeout(prefs)
             migrateWeatherSource(prefs)
+            migrateLlmProfiles(prefs)
         }
     }
 
@@ -82,6 +83,52 @@ class SettingsRepository(
             prefs[SettingsKeys.LLM_TIMEOUT_SECONDS] = Defaults.LLM_TIMEOUT_SECONDS
         }
         prefs[SettingsKeys.MIGRATION_LLM_TIMEOUT_V2] = true
+    }
+
+    /**
+     * 单份大模型配置 -> 多份（`LlmProfiles`）的一次性迁移。
+     *
+     * 把旧六个平铺键（`llm.base_url` / `llm.api_key` / `llm.model` / `llm.timeout_seconds` /
+     * `llm.temperature` / `llm.system_prompt`）读出来拼成一份 [LlmConfig]，塞进 `profiles[0]`，
+     * `activeId` 指向它，然后删掉旧键。**用户零重配**（这正是"已保存的能不能直接转过去"的答案：能）。
+     *
+     * 边界：如果旧键一项都没有（首次安装、或已经迁过），就什么都不做 —— 不伪造一份空配置。
+     */
+    private fun migrateLlmProfiles(prefs: androidx.datastore.preferences.core.MutablePreferences) {
+        if (prefs[SettingsKeys.MIGRATION_LLM_PROFILES] == true) return
+
+        val legacyBaseUrl = prefs[SettingsKeys.LLM_BASE_URL]
+        val legacyApiKey = prefs[SettingsKeys.LLM_API_KEY]
+        val legacyModel = prefs[SettingsKeys.LLM_MODEL]
+
+        // 三者全缺 = 从没配过（或全新安装），无需迁移，但照样打上标记避免下次再查。
+        if (legacyBaseUrl == null && legacyApiKey == null && legacyModel == null) {
+            prefs[SettingsKeys.MIGRATION_LLM_PROFILES] = true
+            return
+        }
+
+        val id = Defaults.newProfileId()
+        val legacy = LlmConfig(
+            id = id,
+            baseUrl = legacyBaseUrl ?: Defaults.LLM_BASE_URL,
+            apiKey = legacyApiKey.orEmpty(),
+            model = legacyModel ?: Defaults.LLM_MODEL,
+            timeoutSeconds = prefs[SettingsKeys.LLM_TIMEOUT_SECONDS] ?: Defaults.LLM_TIMEOUT_SECONDS,
+            temperature = prefs[SettingsKeys.LLM_TEMPERATURE] ?: Defaults.LLM_TEMPERATURE,
+            systemPrompt = prefs[SettingsKeys.LLM_SYSTEM_PROMPT] ?: Defaults.SYSTEM_PROMPT,
+        )
+        prefs[SettingsKeys.LLM_PROFILES_JSON] =
+            SettingsCodec.encodeProfiles(LlmProfiles(profiles = listOf(legacy), activeId = id))
+
+        // 旧键搬家完成，清掉（api_key 是凭据，更不该留着两份）。
+        prefs.remove(SettingsKeys.LLM_BASE_URL)
+        prefs.remove(SettingsKeys.LLM_API_KEY)
+        prefs.remove(SettingsKeys.LLM_MODEL)
+        prefs.remove(SettingsKeys.LLM_TIMEOUT_SECONDS)
+        prefs.remove(SettingsKeys.LLM_TEMPERATURE)
+        prefs.remove(SettingsKeys.LLM_SYSTEM_PROMPT)
+
+        prefs[SettingsKeys.MIGRATION_LLM_PROFILES] = true
     }
 
     /**
@@ -103,7 +150,55 @@ class SettingsRepository(
 
     /** 只清空 API Key，保留其它配置。 */
     suspend fun clearApiKey() {
-        edit { it.copy(llm = it.llm.copy(apiKey = "")) }
+        edit { it.copy(llm = it.llm.copy(profiles = it.llm.profiles.map { p -> p.copy(apiKey = "") })) }
+    }
+
+    // ---------- 多份 AI 配置 ----------
+
+    /** 新增一份空配置（字段全默认，Key 留空让用户填）。返回新配置的 id。 */
+    suspend fun addLlmProfile(): String {
+        val id = Defaults.newProfileId()
+        edit { current ->
+            current.copy(
+                llm = current.llm.copy(
+                    profiles = current.llm.profiles + LlmConfig(id = id),
+                    activeId = id,
+                ),
+            )
+        }
+        return id
+    }
+
+    /** 删除一份配置。删除「当前」那份时，把 active 指向列表第一份。 */
+    suspend fun removeLlmProfile(id: String) {
+        edit { current ->
+            val remaining = current.llm.profiles.filterNot { it.id == id }
+            current.copy(
+                llm = current.llm.copy(
+                    profiles = remaining.ifEmpty { listOf(LlmConfig()) },
+                    activeId = if (current.llm.activeId == id) {
+                        remaining.firstOrNull()?.id.orEmpty()
+                    } else {
+                        current.llm.activeId
+                    },
+                ),
+            )
+        }
+    }
+
+    /**
+     * 把某一份挪到最前（即设为主用）。
+     *
+     * 「失败自动切换」按列表顺序回退，所以"换主用" = 调整顺序；
+     * 单列一个布尔开关会和顺序打架，不如统一成"排序"这一个动作。
+     */
+    suspend fun moveLlmProfileToFront(id: String) {
+        edit { current ->
+            val list = current.llm.profiles
+            val target = list.firstOrNull { it.id == id } ?: return@edit current
+            val reordered = listOf(target) + list.filterNot { it.id == id }
+            current.copy(llm = current.llm.copy(profiles = reordered, activeId = id))
+        }
     }
 
     /**
@@ -143,6 +238,33 @@ class SettingsRepository(
         edit { current ->
             val updated = current.rss.feeds.map { feed ->
                 if (feed.id == id) feed.copy(enabled = enabled) else feed
+            }
+            current.copy(rss = current.rss.copy(feeds = updated))
+        }
+    }
+
+    /**
+     * 勾选 / 取消一个推荐源（来自 `Defaults.RSS_CATALOG`）。
+     *
+     * 与 [addRssFeed] 的区别：预设源带固定 id，勾选时直接用它，方便下次按 id 回显状态；
+     * 取消时按 id 从 feeds 里移除（而不是设 enabled=false —— 用户明确"不要这个源"，
+     * 留一条 disabled 记录没意义，还占 JSON）。
+     *
+     * 去重：勾选时如果已有同 id 或同 url 的，就把已有的设成 enabled=true，不重复添加
+     * （兼容老用户用过的随机 id：按 url 也能认出来）。
+     */
+    suspend fun togglePresetFeed(preset: RssFeed, checked: Boolean) {
+        edit { current ->
+            val feeds = current.rss.feeds
+            val existing = feeds.firstOrNull {
+                it.id == preset.id || it.url.equals(preset.url, ignoreCase = true)
+            }
+            val updated = when {
+                checked && existing != null ->
+                    feeds.map { if (it.id == existing.id) it.copy(enabled = true) else it }
+                checked && existing == null -> feeds + preset.copy(enabled = true)
+                !checked && existing != null -> feeds.filterNot { it.id == existing.id }
+                else -> feeds
             }
             current.copy(rss = current.rss.copy(feeds = updated))
         }

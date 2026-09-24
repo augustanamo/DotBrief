@@ -7,6 +7,8 @@ import com.augustana.dotbrief.data.ingest.CalendarSource
 import com.augustana.dotbrief.data.ingest.RssSource
 import com.augustana.dotbrief.data.ingest.WeatherSource
 import com.augustana.dotbrief.data.llm.LlmClient
+import com.augustana.dotbrief.data.llm.LlmCallLogStore
+import com.augustana.dotbrief.data.llm.buildLlmCallLogStore
 import com.augustana.dotbrief.data.local.BriefDatabase
 import com.augustana.dotbrief.data.local.dao.CapturedNotificationDao
 import com.augustana.dotbrief.data.settings.RuntimeStateStore
@@ -14,7 +16,11 @@ import com.augustana.dotbrief.data.settings.SettingsRepository
 import com.augustana.dotbrief.data.settings.runtimeDataStore
 import com.augustana.dotbrief.data.settings.settingsDataStore
 import com.augustana.dotbrief.data.tts.DoubaoTtsClient
+import com.augustana.dotbrief.data.update.BriefUpdateScheduler
+import com.augustana.dotbrief.data.update.BriefUpdater
+import com.augustana.dotbrief.data.update.BriefAlarmScheduler
 import com.augustana.dotbrief.domain.GenerateBriefUseCase
+import com.augustana.dotbrief.tts.SpeechCache
 
 /**
  * 手写依赖容器（Service Locator 风格）。
@@ -65,8 +71,16 @@ class AppContainer(context: Context) {
     /** OpenAI 兼容协议的对话补全客户端。 */
     val llmClient: LlmClient by lazy { LlmClient() }
 
+    /** LLM 调用日志（谁成功谁失败），独立 DataStore，见 [LlmCallLogStore]。 */
+    val llmCallLog: LlmCallLogStore by lazy {
+        buildLlmCallLogStore(appContext)
+    }
+
     /** 豆包（火山引擎）语音合成客户端。只在 TTS 引擎选了豆包时才会被真正调用。 */
     val doubaoTtsClient: DoubaoTtsClient by lazy { DoubaoTtsClient() }
+
+    /** 云端合成语音的缓存（以正文为 key），命中则跳过合成、直接播缓存。 */
+    val speechCache: SpeechCache by lazy { SpeechCache(appContext) }
 
     /**
      * 生成一份口语简报：并行取数 -> 拼 prompt -> 调模型 -> 清洗 Markdown。
@@ -82,6 +96,41 @@ class AppContainer(context: Context) {
             rssSource = rssSource,
             weatherSource = weatherSource,
             llmClient = llmClient,
+            llmCallLog = llmCallLog,
+        )
+    }
+
+    /**
+     * 到点自动刷新内容（只生成、不出声）的排期器。
+     *
+     * 它只是"排下一个时刻"，真正干活的是 [com.augustana.dotbrief.data.update.BriefUpdateWorker]。
+     * 放在容器里是为了让三个调用方（Application 启动、设置页保存、上一轮任务结束）
+     * 拿到的是同一份配置来源，不必各自去拼路径。
+     */
+    val briefUpdateScheduler: BriefUpdateScheduler by lazy {
+        BriefUpdateScheduler(appContext, settingsRepository)
+    }
+
+    /**
+     * 定时**出声**播报的排期器，与上面的自动刷新排期器完全独立（时刻表、开关、任务名都各走各的）。
+     */
+    val briefAlarmScheduler: BriefAlarmScheduler by lazy {
+        BriefAlarmScheduler(appContext, settingsRepository)
+    }
+
+    /**
+     * 「生成一份新的并落盘」这个动作本身，不带任何触发方式。
+     *
+     * 两个调用方共用它：定时任务（[com.augustana.dotbrief.data.update.BriefUpdateWorker]）
+     * 和设置页的「刷新内容」（`SettingsViewModel.updateBriefNow`）。
+     * 抽取的理由写在类注释里 —— 核心是"失败不覆盖缓存"这类规矩不能有两份实现。
+     */
+    val briefUpdater: BriefUpdater by lazy {
+        BriefUpdater(
+            context = appContext,
+            settingsRepository = settingsRepository,
+            runtimeStateStore = runtimeStateStore,
+            generateBrief = generateBrief,
         )
     }
 

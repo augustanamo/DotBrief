@@ -74,9 +74,46 @@ class CloudTtsPlayer(private val context: Context) {
         }
     }
 
+    /**
+     * 暂停：从当前播放位置停住，之后可 [resume] 从同一处继续。
+     *
+     * 只对"真正在播"的状态有效；准备中（`prepareAsync` 未完成）或已释放时是空操作，
+     * 因为那时 `isPlaying` 本来就是 false，`pause()` 也无从谈起。
+     */
+    fun pause() {
+        val media = player ?: return
+        runCatching { if (media.isPlaying) media.pause() }
+    }
+
+    /**
+     * 从暂停处继续。只有 [pause] 过（`isPaused == true`）才有效；
+     * 正常播放中调用是空操作，不会从头重播。
+     */
+    fun resume() {
+        val media = player ?: return
+        runCatching { if (!media.isPlaying) media.start() }
+    }
+
     /** 打断/收尾时调用。可重复调用。 */
     fun stop() {
         releasePlayer()
+    }
+
+    /**
+     * 当前播放进度（0..1），给桌面点阵的"逐渐灰掉"用。
+     *
+     * 云端这条路比系统 TTS 幸运：拿到的是一个真实音频文件，`currentPosition / duration`
+     * 就是精确进度，不需要像系统引擎那样靠字数估算。但**准备中/已释放时必须能返回 0**：
+     * `duration` 在 `prepareAsync` 完成前是 -1，直接拿去做分母会得到负数或 NaN，
+     * 一路传下去会把点阵的灰盘半径算成 NaN —— 整块点阵画不出来（Canvas 遇 NaN 是静默不画）。
+     * 所以这里 runCatching + coerceIn 两道都留着。
+     */
+    fun progress(): Float {
+        val media = player ?: return 0f
+        return runCatching {
+            val duration = media.duration
+            if (duration <= 0) 0f else media.currentPosition.toFloat() / duration
+        }.getOrDefault(0f).coerceIn(0f, 1f)
     }
 
     private fun releasePlayer() {

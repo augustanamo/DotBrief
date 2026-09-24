@@ -38,6 +38,15 @@ class BriefWidgetApp : Application() {
         // 压根不会经过 Activity，但一定经过 Application.onCreate。
         appScope.launch { runCatching { container.settingsRepository.ensureMigrations() } }
 
+        // 自动刷新的排期也在这里补位：开机、覆盖安装、被小组件点起来都会走到这一步，
+        // 于是"任务因为某种原因不在了"能被自愈。已经排好时不会被打断（见 KEEP 的说明）。
+        // 它内部自己兜异常，所以这里不必再包一层 —— 也更该如此：真出了问题不该让
+        // launch 抛出去把后面的初始化也带停。
+        appScope.launch { container.briefUpdateScheduler.ensureScheduled() }
+
+        // 定时出声播报的排期同样在这里补位（与自动刷新同一套自愈理由）。
+        appScope.launch { container.briefAlarmScheduler.ensureScheduled() }
+
         // 主动回推一份 RemoteViews，盖掉 system_server 里可能残留的旧缓存。
         // 这一步是「应用更新后小组件显示无法添加微件」的自愈入口，见 BriefWidgetProvider.refreshAll。
         BriefWidgetProvider.refreshAll(this)
