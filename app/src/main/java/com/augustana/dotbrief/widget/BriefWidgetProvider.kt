@@ -122,14 +122,19 @@ class BriefWidgetProvider : AppWidgetProvider() {
          * [unheard] 默认沿用内存缓存里的值：生成中 / 播报中 / 出错这几次推送
          * 都不该改变"有没有新内容"，它们只是同一个事实的不同表情。
          * 唯一需要显式传的时候是**听完**那一下（见 [BriefPlaybackService.finish]）。
+         *
+         * [audioActive] 是"此刻有没有声音在响"，决定点阵动不动 ——
+         * **必须与落盘的同一个值保持一致**（见 `RuntimeStateStore.setAudioActive`）：
+         * 这里决定桌面换哪份布局（有没有 flipper），落盘那份决定帧工厂给几帧。
+         * 只改一边的后果是"布局在动、但只有一帧"，看起来就是没动。
          */
         fun applyState(
             context: Context,
             state: WidgetState,
-            speaking: Boolean,
+            audioActive: Boolean,
             unheard: Boolean = cachedState.unheard,
         ) {
-            val runtime = cachedState.copy(state = state, speaking = speaking, unheard = unheard)
+            val runtime = cachedState.copy(state = state, audioActive = audioActive, unheard = unheard)
             cachedState = runtime
             pushToHosts(context, runtime)
         }

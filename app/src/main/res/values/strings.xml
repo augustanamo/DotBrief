@@ -43,7 +43,9 @@
     <string name="section_llm_desc">填一个兼容 OpenAI 协议的接口就行：DeepSeek、OpenAI、Gemini 兼容端点、本地 Ollama 都可以</string>
     <string name="section_rss">新闻订阅源</string>
     <string name="section_rss_desc">从这些源抓最新条目，交给模型挑值得一听的讲。讲几条由当天素材多少决定</string>
-    <string name="label_rss_catalog">推荐源 · 勾选就添加</string>
+    <string name="label_rss_catalog">推荐源 · 已选 %1$d / %2$d</string>
+    <!-- 到上限时的说明。要点是"多加源不会让播报变长"，否则用户会以为勾得多就听得全。 -->
+    <string name="msg_rss_limit">最多 %1$d 个源。一次播报就五分钟，源越多每条讲得越浅 —— 想换就先取消一个。</string>
     <string name="label_rss_search">搜索订阅源</string>
     <string name="msg_rss_no_match">没有匹配的源，换个关键词或自己添加</string>
 

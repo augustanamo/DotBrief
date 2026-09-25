@@ -60,26 +60,35 @@ object BriefWidgetRenderer {
     private const val REQUEST_TOGGLE = 0x1001
     private const val DEFAULT_SIZE_DP = 110
 
-    /** 当前是否进入"动效"布局。 */
-    fun isPlaying(runtime: WidgetRuntimeState): Boolean =
-        runtime.state == WidgetState.PLAYING || runtime.speaking
+    /**
+     * 当前是否进入"动效"布局。
+     *
+     * 判据是**有没有声音在响**（[WidgetRuntimeState.audioActive]），不是"有没有人声"：
+     * 点下去 BGM 一起播就该流动起来 —— 那 11 秒里用户已经知道"它在为我干活了"，
+     * 让它静止着等，等于把最该有反馈的一段做成了没有反馈。
+     */
+    fun isAudible(runtime: WidgetRuntimeState): Boolean =
+        runtime.state == WidgetState.PLAYING || runtime.audioActive
 
     /**
      * 当前是否真的需要 `AdapterViewFlipper` 驱动逐帧切换。
      *
-     * **只有播报中才动，其余一律静止。** 这条规则把三件事归到了一处：
+     * **只有在出声的时候才动，其余一律静止。** 这条规则把三件事归到了一处：
      *
      * - 桌面点阵是个"安静的东西"，静止才是它的常态；一天里绝大多数时间它只是待着，
      *   没有任何理由让桌面一直在切帧（耗电、也和"桌面要静"的气质相反）；
-     * - 动 = 正在念。这是一个**动作**的信号，而不是**内容**的信号 ——
+     * - 动 = 有声音在响。这是一个**动作**的信号，而不是**内容**的信号 ——
      *   有没有新内容是靠颜色说的（见 [WidgetRuntimeState.muted]），不需要再动一遍；
      * - 于是三种状态各用一种通道表达，互不重叠：
-     *   灰 = 没新东西，彩色 = 有新东西，流动 = 正在说给你听。
+     *   灰 = 没新东西，彩色 = 有新东西，流动 = 正在出声。
      *
-     * 代价是"霓虹轮播"从"待机也流动"缩成了"只在播报时流动"。这是有意的：
+     * ⚠️ "出声"从 **BGM 起播那一刻**算起，不只是人声 —— 见 [isAudible]。
+     * 暂停与收尾之后自然回到静止（两者都会把 `audioActive` 落回 false）。
+     *
+     * 代价是"霓虹轮播"从"待机也流动"缩成了"只在出声时流动"。这是有意的：
      * 一个需要靠常驻动画来提醒存在的装饰，本身就是噪音。
      */
-    fun isAnimated(runtime: WidgetRuntimeState): Boolean = isPlaying(runtime)
+    fun isAnimated(runtime: WidgetRuntimeState): Boolean = isAudible(runtime)
 
     /** 按小组件实际占位算绘制尺寸（返回物理像素），并压在 Binder 事务上限内。 */
     fun artSizePx(context: Context, appWidgetId: Int): Int {
@@ -97,7 +106,7 @@ object BriefWidgetRenderer {
         runtime: WidgetRuntimeState,
         accent: AccentColor,
     ): RemoteViews {
-        val playing = isPlaying(runtime)
+        val audible = isAudible(runtime)
         val muted = runtime.muted
         // 布局三选一，判断依据只有一个：**要不要动**。
         //
@@ -107,7 +116,7 @@ object BriefWidgetRenderer {
         //   选了就沿色环流转（260ms/帧），没选就单纯呼吸（170ms/帧）。
         //   呼吸要快、轮播要慢，一套节奏满足不了两个目的，详见布局文件里的注释。
         val layout = when {
-            !playing -> R.layout.widget_brief
+            !audible -> R.layout.widget_brief
             accent.carousel -> R.layout.widget_brief_carousel
             else -> R.layout.widget_brief_playing
         }
@@ -126,7 +135,7 @@ object BriefWidgetRenderer {
         views.setOnClickPendingIntent(R.id.widget_static, toggle)
         views.setOnClickPendingIntent(R.id.widget_tap_target, toggle)
 
-        if (playing) {
+        if (audible) {
             val framesIntent = Intent(context, BriefWidgetService::class.java).apply {
                 // 每个 widget 的 data 必须唯一，否则多个小组件会共用同一个 adapter
                 data = Uri.parse("briefwidget://frames/$appWidgetId")

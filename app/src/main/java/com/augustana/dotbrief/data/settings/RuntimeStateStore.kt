@@ -22,10 +22,13 @@ enum class WidgetState {
     /** 待机：一枚安静的点阵。有没听过的新内容时是彩色的，否则是灰的。 */
     IDLE,
 
-    /** 生成中：点阵亮着但不能动（动效只在真正开口后才有），等几秒就有声音了。 */
+    /**
+     * 生成中：点阵亮着、也已经会动 —— 点下去 BGM 一响就进这一档，
+     * 等几秒人声才接上。[audioActive] 才是"动不动"的判据，与是不是人声无关。
+     */
     GENERATING,
 
-    /** 播放中：点阵在流动 —— 这是唯一会动的状态。 */
+    /** 播放中：人声在念。点阵在流动（与 [GENERATING] 一样动，只是多了念到哪儿的进度）。 */
     PLAYING,
 
     /** 出错：点阵停在彩色上，点一下可以重试。具体原因看设置页与日志。 */
@@ -39,7 +42,18 @@ enum class WidgetState {
  */
 data class WidgetRuntimeState(
     val state: WidgetState = WidgetState.IDLE,
-    val speaking: Boolean = false,
+    /**
+     * **此刻有没有声音在响** —— 只要 BGM 起了或人声在念就是 true。
+     *
+     * 它是"点阵该不该流动"的**唯一**判据（见 `BriefWidgetRenderer.isAudible`），
+     * 与 `state` 分工：`state` 说"处在哪一档"（决定布局与进度），这里说"有没有声"。
+     * 两者刻意不合并 —— BGM 那 11 秒里 `state` 还是 GENERATING，但已经该动了；
+     * 而暂停时 `state` 是 IDLE、这里也回到 false（暂停 = 不播放 = 静止）。
+     *
+     * ⚠️ 持久化的键仍是 `runtime.speaking`（历史名），改键名会让旧数据失效，
+     * 不值得为一次改名付这个代价 —— 但读代码时请按 audioActive 理解它。
+     */
+    val audioActive: Boolean = false,
     val lastBriefText: String = "",
     val lastBriefAtEpochSeconds: Long = 0L,
     val lastError: String = "",
@@ -76,7 +90,7 @@ data class WidgetRuntimeState(
      * 生成中 / 播报中 / 出错时点阵都是"活的"，颜色是它们的信息载体，不能被压成灰。
      */
     val muted: Boolean
-        get() = state == WidgetState.IDLE && !speaking && !unheard
+        get() = state == WidgetState.IDLE && !audioActive && !unheard
 }
 
 /**
@@ -101,6 +115,26 @@ class RuntimeStateStore(
         dataStore.edit { prefs -> prefs[RuntimeKeys.WIDGET_STATE] = state.name }
     }
 
+    /**
+     * **音频**起止：只标"有没有声音在响"，**不动 `WIDGET_STATE`**。
+     *
+     * 与 [setSpeaking] 的分工：
+     * - BGM 起播那一刻走这里 —— 那时人声还没出来，状态机该停在 GENERATING
+     *   （"在准备"），但点阵从这一刻起就要流动了；
+     * - 暂停 / 续播也走这里：暂停是不播放，点阵该停；续播再接上。
+     * 这两处都不能顺手切状态机，否则 GENERATING 这一档会被吃掉，
+     * 或者续播时状态机凭空变成 PLAYING（进度却还停在半途）。
+     */
+    suspend fun setAudioActive(active: Boolean) {
+        dataStore.edit { prefs -> prefs[RuntimeKeys.SPEAKING] = active }
+    }
+
+    /**
+     * 人声开口 / 整段收尾：音频标志与 `WIDGET_STATE` **一起**切。
+     *
+     * 开口时两件事必然同时发生（有声音了 + 进入播报档），拆成两次写盘只会多留一个中间态。
+     * BGM 阶段与暂停/续播**不要**用这个方法，见 [setAudioActive]。
+     */
     suspend fun setSpeaking(speaking: Boolean) {
         dataStore.edit { prefs ->
             prefs[RuntimeKeys.SPEAKING] = speaking
@@ -197,7 +231,7 @@ internal fun Preferences.toRuntimeState(): WidgetRuntimeState {
 
     return WidgetRuntimeState(
         state = if (rawState == WidgetState.ERROR && isErrorExpired()) WidgetState.IDLE else rawState,
-        speaking = this[RuntimeKeys.SPEAKING] ?: false,
+        audioActive = this[RuntimeKeys.SPEAKING] ?: false,
         lastBriefText = this[RuntimeKeys.LAST_BRIEF_TEXT] ?: "",
         lastBriefAtEpochSeconds = (this[RuntimeKeys.LAST_BRIEF_AT] ?: 0).toLong(),
         // 错误文案有意不跟着状态一起清掉：它要留在设置页当排查线索

@@ -108,6 +108,19 @@ object Defaults {
      */
     const val RSS_MAX_CANDIDATES: Int = 48
 
+    /**
+     * 最多同时启用几个源。
+     *
+     * 这个数不是拍出来的：它就是 [RSS_MAX_CANDIDATES] ÷ [RSS_ITEMS_PER_FEED] ——
+     * 8 个源正好把候选池填满（48 条）。第 9 个源**不会让播报变长**，
+     * 它只会让每个源分到的名额变少：同样五分钟里，每条讲得更浅、更像念标题。
+     * 所以与其让用户勾十几个，不如在这里就劝住。
+     *
+     * 只做 UI 引导（勾满之后未选的源不可再勾），**不做抓取时的硬截断** ——
+     * 硬截断会让"我明明勾了"和"怎么没讲到"对不上，比不让勾更让人困惑。
+     */
+    const val RSS_MAX_FEEDS: Int = RSS_MAX_CANDIDATES / RSS_ITEMS_PER_FEED
+
     val RSS_FEEDS: List<RssFeed> = listOf(
         RssFeed(id = "preset-ithome", name = "IT之家", url = "https://www.ithome.com/rss/"),
         RssFeed(id = "preset-sspai", name = "少数派", url = "https://sspai.com/feed"),

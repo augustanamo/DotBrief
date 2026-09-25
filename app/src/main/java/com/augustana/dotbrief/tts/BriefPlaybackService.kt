@@ -246,6 +246,7 @@ class BriefPlaybackService : Service() {
             val app = application as? BriefWidgetApp ?: return
             app.appScope.launch {
                 runCatching { container.runtimeStateStore.setState(WidgetState.IDLE) }
+                runCatching { container.runtimeStateStore.setAudioActive(false) }
                 BriefWidgetProvider.applyState(app, WidgetState.IDLE, false)
                 // 被回收/划掉时进度还停在半路，不清掉的话下一次播报会从半灰起播
                 BriefWidgetProvider.resetProgress()
@@ -293,7 +294,15 @@ class BriefPlaybackService : Service() {
             // 用 GENERATING 而不是 PLAYING：人声还没出来，点阵不该开始流动
             // （流动的语义是"正在念给你听"）。开口那一刻由 [onPlaybackStarted] 接手。
             store.setState(WidgetState.GENERATING)
-            BriefWidgetProvider.applyState(this@BriefPlaybackService, WidgetState.GENERATING, false)
+            // 点阵从 BGM 第一声起就该流动：判据是"有没有声音在响"，与人声是否开口无关。
+            // 落盘与推桌面必须**成对** —— 前者决定帧工厂给几帧，后者决定桌面用哪份布局，
+            // 只改一边的结果是"布局在动、但只有一帧"，看起来就是没动。
+            runCatching { store.setAudioActive(true) }
+            BriefWidgetProvider.applyState(
+                this@BriefPlaybackService,
+                WidgetState.GENERATING,
+                audioActive = true,
+            )
 
             val cached = store.snapshot()
 
@@ -643,7 +652,7 @@ class BriefPlaybackService : Service() {
             BriefWidgetProvider.applyState(
                 this@BriefPlaybackService,
                 WidgetState.PLAYING,
-                speaking = true,
+                audioActive = true,
             )
             updateNotification(getString(R.string.notif_playing_text))
         }
@@ -751,7 +760,16 @@ class BriefPlaybackService : Service() {
             // 音乐也跟着回来：暂停时它一起停住了，不接着放会前后不一致。
             bgmPlayer?.resume()
             Log.i(TAG, "续播：从暂停处继续")
-            BriefWidgetProvider.applyState(this, WidgetState.PLAYING, speaking = true)
+            // 落盘 + 推桌面一起放进协程（DataStore 是挂起操作），且**先落盘再推**：
+            // 帧工厂读的是落盘那份，晚一步就会出现"布局在动、却只有一帧"。
+            scope.launch {
+                runCatching { container.runtimeStateStore.setAudioActive(true) }
+                BriefWidgetProvider.applyState(
+                    this@BriefPlaybackService,
+                    WidgetState.PLAYING,
+                    audioActive = true,
+                )
+            }
             updateNotification(getString(R.string.notif_playing_text))
             startProgressTicker()
         } else {
@@ -762,7 +780,15 @@ class BriefPlaybackService : Service() {
             bgmPlayer?.pause()
             Log.i(TAG, "暂停播报")
             progressJob?.cancel()
-            BriefWidgetProvider.applyState(this, WidgetState.IDLE, speaking = false)
+            // 暂停 = 不播放 = 点阵该静止，所以音频标志也要落回 false（不只是推桌面）。
+            scope.launch {
+                runCatching { container.runtimeStateStore.setAudioActive(false) }
+                BriefWidgetProvider.applyState(
+                    this@BriefPlaybackService,
+                    WidgetState.IDLE,
+                    audioActive = false,
+                )
+            }
             updateNotification(getString(R.string.notif_paused_text))
         }
     }
@@ -814,7 +840,7 @@ class BriefPlaybackService : Service() {
             BriefWidgetProvider.applyState(
                 this@BriefPlaybackService,
                 WidgetState.IDLE,
-                speaking = false,
+                audioActive = false,
                 unheard = false,
             )
             // 切回静态布局**之后**才复位：那时 flipper 已经不在任何一份 RemoteViews 里，
@@ -870,6 +896,9 @@ class BriefPlaybackService : Service() {
 
         scope.launch {
             runCatching { container.runtimeStateStore.setError(message) }
+            // 失败可能发生在 BGM 已经在响的时刻（合成挂了），那时音频标志还亮着 ——
+            // 不清掉，点阵会一直转下去，看着像"没在播却一直在动"。
+            runCatching { container.runtimeStateStore.setAudioActive(false) }
             BriefWidgetProvider.applyState(this@BriefPlaybackService, WidgetState.ERROR, false)
             // 失败要让下一次点击从头来过：进度留着的话，第二次播报会从半灰起播
             BriefWidgetProvider.resetProgress()

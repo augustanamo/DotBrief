@@ -531,6 +531,8 @@ fun NothingSwitch(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    /** 禁用态：开关变灰、点不动。用于"名额已经用完了"这类硬约束（见 RSS 的勾选上限）。 */
+    enabled: Boolean = true,
 ) {
     val scheme = MaterialTheme.colorScheme
     Switch(
@@ -538,6 +540,7 @@ fun NothingSwitch(
         onCheckedChange = onCheckedChange,
         modifier = modifier,
         thumbContent = null,
+        enabled = enabled,
         colors = SwitchDefaults.colors(
             checkedThumbColor = scheme.onTertiary,
             checkedTrackColor = scheme.tertiary,

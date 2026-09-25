@@ -78,6 +78,7 @@ import com.augustana.dotbrief.R
 import com.augustana.dotbrief.data.settings.AccentColor
 import com.augustana.dotbrief.data.settings.BriefSource
 import com.augustana.dotbrief.data.settings.CarouselPace
+import com.augustana.dotbrief.data.settings.Defaults
 import com.augustana.dotbrief.data.settings.LlmConfig
 import com.augustana.dotbrief.data.llm.LlmCallLogEntry
 import com.augustana.dotbrief.data.settings.RSS_CATALOG_GROUPS
@@ -1562,6 +1563,11 @@ private fun RssSection(
             label = stringResource(R.string.label_rss_search),
         )
 
+        // 勾选上限：候选池 ÷ 每源条数 = 8（见 Defaults.RSS_MAX_FEEDS）。
+        // 勾满之后未选的源不可再勾；已勾选的照常能取消，否则用户会卡在里面出不来。
+        val enabledCount = rss.feeds.count { it.enabled && it.url.isNotBlank() }
+        val feedLimitReached = enabledCount >= Defaults.RSS_MAX_FEEDS
+
         // 推荐源目录：按分类分组，勾选即添加、取消即移除，不用手输地址。
         // 勾选状态 = 用户 feeds 里有没有这个源（按 id 或 url 任一匹配，兼容老用户的随机 id）。
         val filtered = remember(query, catalog) {
@@ -1586,7 +1592,18 @@ private fun RssSection(
             )
         }
 
-        BlockLabel(text = stringResource(R.string.label_rss_catalog))
+        BlockLabel(
+            text = stringResource(R.string.label_rss_catalog, enabledCount, Defaults.RSS_MAX_FEEDS),
+        )
+        // 到上限时把话说清楚：多加源**不会**让播报变长，只会让每条变浅。
+        // 不说的话，用户会以为"勾得多 = 听得全"，然后奇怪为什么每条只剩一句。
+        if (feedLimitReached) {
+            Text(
+                text = stringResource(R.string.msg_rss_limit, Defaults.RSS_MAX_FEEDS),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         filtered.forEach { group ->
             Text(
                 text = group.title,
@@ -1602,6 +1619,8 @@ private fun RssSection(
                     name = preset.name,
                     url = preset.url,
                     checked = checked,
+                    // 已达上限且这一条还没勾：不给勾。已勾的永远可以取消。
+                    enabled = checked || !feedLimitReached,
                     onToggle = { onTogglePresetFeed(preset, it) },
                 )
             }
@@ -1619,6 +1638,8 @@ private fun RssSection(
             customFeeds.forEach { feed ->
                 FeedRow(
                     feed = feed,
+                    // 同上：已启用的随时可关，未启用的在上限内才给开。
+                    enabled = feed.enabled || !feedLimitReached,
                     onToggle = { enabled -> onToggleFeed(feed.id, enabled) },
                     onRemove = { onRemoveFeed(feed.id) },
                 )
@@ -1645,6 +1666,7 @@ private fun PresetFeedRow(
     name: String,
     url: String,
     checked: Boolean,
+    enabled: Boolean,
     onToggle: (Boolean) -> Unit,
 ) {
     Row(
@@ -1656,6 +1678,12 @@ private fun PresetFeedRow(
             Text(
                 text = name,
                 style = MaterialTheme.typography.bodyMedium,
+                // 点不动的那几条要看得出来点不动 —— 否则用户会以为开关坏了。
+                color = if (enabled) {
+                    MaterialTheme.colorScheme.onSurface
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
             )
             Text(
                 text = url,
@@ -1665,13 +1693,14 @@ private fun PresetFeedRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        NothingSwitch(checked = checked, onCheckedChange = onToggle)
+        NothingSwitch(checked = checked, onCheckedChange = onToggle, enabled = enabled)
     }
 }
 
 @Composable
 private fun FeedRow(
     feed: RssFeed,
+    enabled: Boolean,
     onToggle: (Boolean) -> Unit,
     onRemove: () -> Unit,
 ) {
@@ -1693,7 +1722,7 @@ private fun FeedRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        NothingSwitch(checked = feed.enabled, onCheckedChange = onToggle)
+        NothingSwitch(checked = feed.enabled, onCheckedChange = onToggle, enabled = enabled)
         SquareIconButton(
             icon = Icons.Filled.Close,
             contentDescription = stringResource(R.string.action_delete),

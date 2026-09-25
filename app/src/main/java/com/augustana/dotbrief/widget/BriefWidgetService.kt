@@ -37,7 +37,7 @@ private class BriefFrameFactory(
     private val appWidgetId: Int,
 ) : RemoteViewsService.RemoteViewsFactory {
 
-    private var playing: Boolean = false
+    private var audible: Boolean = false
 
     /**
      * 灰阶静止态：安静待机 + 没有没听过的新内容。
@@ -58,7 +58,7 @@ private class BriefFrameFactory(
         val runtime = app?.let {
             runBlocking { it.container.runtimeStateStore.snapshot() }
         }
-        playing = runtime?.let { it.state == WidgetState.PLAYING || it.speaking } ?: false
+        audible = runtime?.let { it.state == WidgetState.PLAYING || it.audioActive } ?: false
 
         // "有没有新内容"要查一次通知库才算得出来，帧工厂里允许阻塞（系统在子线程回调），
         // 所以这里当场算，而不是等谁把它塞进 DataStore。
@@ -94,15 +94,15 @@ private class BriefFrameFactory(
     /**
      * 一个动画序列有多少帧。
      *
-     * 「要不要动」在 Provider 与这里都只有一条判据：**在不在播报**。
-     * 所以 `animated` 直接跟着 `playing` 走 —— 这里唯二会用到帧工厂的时刻，
-     * 就是播报开始（要开始换帧）与播报结束（要换回静止布局）。
+     * 「要不要动」在 Provider 与这里都只有一条判据：**有没有声音在响**
+     * （起播的 BGM 也算）。所以 `animated` 直接跟着 `audible` 走 ——
+     * 这里唯二会用到帧工厂的时刻，就是出声开始（要开始换帧）与静下来（要换回静止布局）。
      *
      * 播报中开轮播时序列长度 = 色环步数（28 / 42 / 56，见 [CarouselPace]），
      * 而呼吸周期固定 14 帧 —— 14 能整除这三个数，所以两个循环在序列末尾同相，
      * 转完一圈色环时亮度刚好也回到起点。
      */
-    private val animated: Boolean get() = playing
+    private val animated: Boolean get() = audible
 
     private val sequenceFrames: Int
         get() = if (accent.carousel) {
@@ -115,7 +115,7 @@ private class BriefFrameFactory(
 
     override fun getViewAt(position: Int): RemoteViews {
         val views = RemoteViews(context.packageName, R.layout.widget_brief_frame)
-        val glow = if (playing) {
+        val glow = if (audible) {
             DotMatrixArt.glowForFrame(position)
         } else {
             DotMatrixArt.IDLE_GLOW
@@ -140,7 +140,7 @@ private class BriefFrameFactory(
                 // 只有播报中才有进度可言（这个序列本身也只在播报中存在）。
                 // 多这一道判断是为了防止"布局还停在 playing、进度已复位"的瞬间画出全彩的一帧：
                 // 复位与切布局之间有一段异步窗口，宁可这半秒不上进度，也不要它闪一下。
-                progress = if (playing) BriefProgress.value else 0f,
+                progress = if (audible) BriefProgress.value else 0f,
             ),
         )
         return views
