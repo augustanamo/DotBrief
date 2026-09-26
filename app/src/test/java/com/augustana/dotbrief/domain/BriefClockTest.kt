@@ -15,6 +15,9 @@ import java.time.LocalDateTime
  * - 闹钟：开场说具体时间（"现在是下午2点52分"）；
  * - 其余：只说问候语（"下午好"），并把旧开场尾巴里的问候清掉，避免"下午好，早上好"。
  *
+ * 开场**不含日期**（见 `SpokenTime` 开头）。但升级前生成的缓存里还留着"9月23日 星期三"，
+ * 所以这里有一组用例专门盯着"旧日期能被换掉" —— 那是不必为存量缓存单独写迁移的依据。
+ *
  * 深夜（23 点–次日 5 点前）还会在结尾补一句"夜深了，早点休息。"——
  * 白天生成的缓存在深夜播放时，结尾该有这句话；原文已有类似话则不重复。
  */
@@ -34,7 +37,7 @@ class BriefClockTest {
 
         assertEquals(
             "下午好。今天有两件事。",
-            BriefClock.refresh(cached, includeDate = false, at = at),
+            BriefClock.refresh(cached, at = at),
         )
     }
 
@@ -46,7 +49,7 @@ class BriefClockTest {
 
         assertEquals(
             "下午好。今天有两件事。",
-            BriefClock.refresh(cached, includeDate = false, at = at),
+            BriefClock.refresh(cached, at = at),
         )
     }
 
@@ -56,7 +59,7 @@ class BriefClockTest {
 
         assertEquals(
             "下午好。今天要记得跟客户说早上好。",
-            BriefClock.refresh(cached, includeDate = false, at = at),
+            BriefClock.refresh(cached, at = at),
         )
     }
 
@@ -64,7 +67,7 @@ class BriefClockTest {
     fun `非闹钟 - 不以时间或问候开头时原样返回`() {
         val cached = "今天天气不错，有两件事。"
 
-        assertEquals(cached, BriefClock.refresh(cached, includeDate = false, at = at))
+        assertEquals(cached, BriefClock.refresh(cached, at = at))
     }
 
     @Test
@@ -73,7 +76,7 @@ class BriefClockTest {
         // 宁可把旧时间留在里面，也不能切成"新时间 + 旧残句"。
         val cached = "现在是上午十点" + "先把今天的事情说清楚".repeat(4)
 
-        assertEquals(cached, BriefClock.refresh(cached, includeDate = false, at = at))
+        assertEquals(cached, BriefClock.refresh(cached, at = at))
     }
 
     // ---- 闹钟（定时播报）：说具体时间，像闹钟报时 ----
@@ -84,17 +87,30 @@ class BriefClockTest {
 
         assertEquals(
             "现在是下午2点52分。今天有两件事。",
-            BriefClock.refresh(cached, includeDate = false, at = at, isAlarm = true),
+            BriefClock.refresh(cached, at = at, isAlarm = true),
         )
     }
 
     @Test
-    fun `闹钟 - 今天第一次开口时补上日期`() {
-        val cached = "现在是上午10点。今天有两件事。"
+    fun `闹钟 - 旧缓存里的日期会被换掉`() {
+        // 开场已不再产出日期（见 SpokenTime），但升级前生成的缓存里还有 ——
+        // 那些缓存照样会被念到，所以这里必须认得出、换得掉，
+        // 而不是把一句"9月23日 星期三"念到十月份。
+        val cached = "现在是9月23日 星期三 上午10点。今天有两件事。"
 
         assertEquals(
-            "现在是9月23日 星期三 下午2点52分。今天有两件事。",
-            BriefClock.refresh(cached, includeDate = true, at = at, isAlarm = true),
+            "现在是下午2点52分。今天有两件事。",
+            BriefClock.refresh(cached, at = at, isAlarm = true),
+        )
+    }
+
+    @Test
+    fun `非闹钟 - 旧缓存里带日期的问候也会退掉日期`() {
+        val cached = "9月23日 星期三，早上好。今天有两件事。"
+
+        assertEquals(
+            "下午好。今天有两件事。",
+            BriefClock.refresh(cached, at = at),
         )
     }
 
@@ -105,7 +121,7 @@ class BriefClockTest {
 
         assertEquals(
             "现在是下午2点52分。今天有两件事。",
-            BriefClock.refresh(cached, includeDate = false, at = at, isAlarm = true),
+            BriefClock.refresh(cached, at = at, isAlarm = true),
         )
     }
 
@@ -115,7 +131,7 @@ class BriefClockTest {
 
         assertEquals(
             "现在是下午2点52分。今天要记得跟客户说早上好。",
-            BriefClock.refresh(cached, includeDate = false, at = at, isAlarm = true),
+            BriefClock.refresh(cached, at = at, isAlarm = true),
         )
     }
 
@@ -127,7 +143,7 @@ class BriefClockTest {
 
         assertEquals(
             "晚上好。今天有两件事。夜深了，早点休息。",
-            BriefClock.refresh(cached, includeDate = false, at = atNight),
+            BriefClock.refresh(cached, at = atNight),
         )
     }
 
@@ -137,7 +153,7 @@ class BriefClockTest {
 
         assertEquals(
             "现在是凌晨12点30分。今天有两件事。夜深了，早点休息。",
-            BriefClock.refresh(cached, includeDate = false, at = atNight, isAlarm = true),
+            BriefClock.refresh(cached, at = atNight, isAlarm = true),
         )
     }
 
@@ -147,7 +163,7 @@ class BriefClockTest {
 
         assertEquals(
             "晚上好。今天有两件事。早点休息。",
-            BriefClock.refresh(cached, includeDate = false, at = atNight),
+            BriefClock.refresh(cached, at = atNight),
         )
     }
 
@@ -160,7 +176,7 @@ class BriefClockTest {
 
         assertEquals(
             "下午好。今天有两件事。",
-            BriefClock.refresh(cached, includeDate = false, at = at),
+            BriefClock.refresh(cached, at = at),
         )
     }
 
@@ -170,7 +186,7 @@ class BriefClockTest {
 
         assertEquals(
             "晚上好。今天有两件事。夜深了，早点休息。",
-            BriefClock.refresh(cached, includeDate = false, at = atNight),
+            BriefClock.refresh(cached, at = atNight),
         )
     }
 
@@ -180,7 +196,7 @@ class BriefClockTest {
 
         assertEquals(
             "今天天气不错，有两件事。夜深了，早点休息。",
-            BriefClock.refresh(cached, includeDate = false, at = atNight),
+            BriefClock.refresh(cached, at = atNight),
         )
     }
 
@@ -261,7 +277,7 @@ class BriefClockTest {
         // 正文段的 hash 因此不变、缓存天然命中。它一旦被破坏（比如 refresh
         // 顺手改了个标点），缓存就会静默失效、每次都重新请求。
         val cached = "早上好。今天有两件事。"
-        val refreshed = BriefClock.refresh(cached, includeDate = false, at = at)
+        val refreshed = BriefClock.refresh(cached, at = at)
 
         val before = BriefClock.splitOpening(cached)!!
         val after = BriefClock.splitOpening(refreshed)!!
@@ -273,7 +289,7 @@ class BriefClockTest {
     @Test
     fun `切分 - 闹钟换开场后正文段也不变`() {
         val cached = "现在是9月23日 星期三 上午10点。今天有两件事。"
-        val refreshed = BriefClock.refresh(cached, includeDate = false, at = at, isAlarm = true)
+        val refreshed = BriefClock.refresh(cached, at = at, isAlarm = true)
 
         assertEquals(
             BriefClock.splitOpening(cached)!!.second,

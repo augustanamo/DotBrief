@@ -6,6 +6,25 @@ import java.time.ZoneId
 /**
  * 把时间转成"人话说出来的样子"。
  *
+ * ## 为什么开场不再报日期
+ *
+ * 这里曾经在"每天第一次开口"时报出"9月23日 星期三"。那个设计有两个代价，都不小：
+ *
+ * 1. **每天必然多一次语音请求。** 开场句是单独缓存的（见 `BriefClock.splitOpening`），
+ *    文本里一旦带日期，那段缓存每天都会失效一次 —— 换来的却是"今天几号"这条
+ *    用户瞄一眼手机就知道的信息；
+ * 2. **它引入了一个"今天报过日期没有"的状态**，而这个状态得在两条链路上保持一致：
+ *    现场生成时要决定写不写日期，播放定时缓存时还要把过期的日期换掉
+ *    （`BriefClock.refresh`）。一处漏判就会念出"9月23日 星期三"配 9 月 25 日的内容。
+ *
+ * 现在开场只剩"早上好"这类问候语（或闹钟场景的"现在是上午7点"），**只随时段变**：
+ * 一天里就四五个形态，语音缓存长期命中。日期这件事改为整体不提 ——
+ * 见 `Defaults.SYSTEM_PROMPT` 里那条"绝不报日期"。
+ *
+ * ⚠️ 但**不报日期 ≠ 认不出日期**：升级前生成的缓存正文开头可能还挂着"9月23日 星期三"，
+ * 那段仍然要能被认出来并换掉（见 `BriefClock.OPENING_HEAD`）。删除的是产出日期的能力，
+ * 不是识别它的能力。
+ *
  * ## 为什么要收在一处
  *
  * 这段逻辑原先在三个地方各写了一遍 —— 日历取数、天气取数、简报开场，
@@ -63,30 +82,20 @@ object SpokenTime {
     fun clock(hour: Int, minute: Int): String = "${hourOf(hour)}${minutePart(minute)}"
 
     /**
-     * 开场那句「现在是……」里的"现在"。
+     * 开场那句「现在是……」里的"现在"，例如"上午10点"。
      *
-     * [includeDate] 为真（今天第一次开口）时带上日期与星期：「9月23日 星期三 上午10点」；
-     * 之后只说时段与时刻：「上午10点」。
+     * 只给**闹钟**用（见 [greetingOpen] 的说明）；普通点击播报用 [greetingOpen]，
+     * 那种场景报"上午10点52分"是多余的精确。
      *
-     * 为什么第二次连星期也去掉：用户要的是"每天第一次说今天是几月几号，再听就不说了"，
-     * 而"星期三"和日期是同一类信息（都是"今天是哪天"）。时段与时刻不同 —— 它们每次都变，
-     * 是"现在这一刻"的坐标，听第二遍也有意义。
+     * 有意不带日期：见本文件开头那条"为什么开场不再报日期"。
      *
      * 放在这里而不是留在 [com.augustana.dotbrief.domain.GenerateBriefUseCase] 里，
      * 是因为现在有**两个**地方要生成这句话：生成简报时写进素材，
      * 以及播放定时缓存时把正文开头那句过时的时间换成此刻（见 `BriefClock`）。
      * 同一件事有第二份实现就迟早会走样 —— 这是本文件开头的教训，别在它身上再犯一次。
      */
-    fun nowText(includeDate: Boolean, at: LocalDateTime = LocalDateTime.now(ZoneId.systemDefault())): String {
-        // 局部变量有意不叫 clock：那会与上面的同名函数互相遮蔽，
-        // `val clock = clock(...)` 读起来像自引用，很容易看成递归。
-        val time = clock(at.hour, at.minute)
-        return if (includeDate) {
-            "${at.monthValue}月${at.dayOfMonth}日 ${weekday(at)} $time"
-        } else {
-            time
-        }
-    }
+    fun nowText(at: LocalDateTime = LocalDateTime.now(ZoneId.systemDefault())): String =
+        clock(at.hour, at.minute)
 
     /**
      * 时段问候语：早上好 / 上午好 / 中午好 / 下午好 / 晚上好。
@@ -98,9 +107,8 @@ object SpokenTime {
      * 深夜（23 点–次日 4 点）一律"晚上好"：0 点说"早上好"是错的，那会儿天没亮，
      * 是夜晚不是清晨。所以 18–23 和 0–4 都归"晚上好"，5 点起才算"早上"。
      *
-     * 收在这里而不是留在开场逻辑里，是因为"问候语 + 日期"的开场
-     * （[greetingOpen]）和"换问候语"（`BriefClock.fixGreeting`）都要用它，
-     * 留两份就会像当年的"时段前缀"那样悄悄走样。
+     * 收在这里而不是留在开场逻辑里，是因为生成素材与换开场（`BriefClock.refresh`）
+     * 都要用它，留两份就会像当年的"时段前缀"那样悄悄走样。
      */
     fun greetingFor(hour: Int): String = when (hour) {
         in 5..8 -> "早上好"
@@ -111,25 +119,16 @@ object SpokenTime {
     }
 
     /**
-     * 非闹钟场景的开场白：只说问候语，不说具体几点几分。
-     *
-     * [includeDate] 为真（今天第一次开口）时带上日期与星期：「9月23日 星期三，早上好」；
-     * 之后只说问候语：「早上好」。
-     *
-     * 为什么这里也管 [includeDate]：和 [nowText] 一样，"今天第一次说日期"是跨入口的规则，
-     * 不该在每处各判一遍。问候语和日期不冲突——「9月23日 星期三，早上好」念起来自然。
+     * 非闹钟场景的开场白：只说问候语，不说日期、也不说具体几点几分。
      *
      * 与 [nowText] 的分工：闹钟场景要像报时一样说出具体时刻（[nowText]），
-     * 普通点击只想知道"今天怎么样"，报"上午10点52分"是多余的精确。
+     * 普通点击只想知道"今天怎么样"。
+     *
+     * 保留 [at] 参数而不是直接收 hour：调用方（生成素材、`BriefClock.refresh`）手里
+     * 本来就是完整的"此刻"，让它们各自 `at.hour` 反而是把同一个意思写两遍。
      */
-    fun greetingOpen(includeDate: Boolean, at: LocalDateTime = LocalDateTime.now(ZoneId.systemDefault())): String {
-        val greeting = greetingFor(at.hour)
-        return if (includeDate) {
-            "${at.monthValue}月${at.dayOfMonth}日 ${weekday(at)}，$greeting"
-        } else {
-            greeting
-        }
-    }
+    fun greetingOpen(at: LocalDateTime = LocalDateTime.now(ZoneId.systemDefault())): String =
+        greetingFor(at.hour)
 
     /**
      * 深夜的结尾贴心话："夜深了，早点休息。"。
@@ -139,8 +138,8 @@ object SpokenTime {
      * 其余时段返回 null（白天不打扰、不说教）。
      *
      * 用在两个地方：
-     * - 现场生成时写进 [BriefInput.lateNightHint]，由 [LocalBriefComposer] 结尾拼上、
-     *   [PromptBuilder] 给模型下指令让它在结尾带一句；
+     * - 现场生成时写进 [BriefInput.lateNightHint]，由 [com.augustana.dotbrief.domain.LocalBriefComposer] 结尾拼上、
+     *   [com.augustana.dotbrief.data.llm.PromptBuilder] 给模型下指令让它在结尾带一句；
      * - 播放定时缓存时由 `BriefClock.refresh` 按此刻补一句（缓存可能是白天生成的，
      *   深夜播放时结尾没这句话，需要按当前时刻补上）。
      */
@@ -155,11 +154,4 @@ object SpokenTime {
      * 摘的时候认它，才谈得上对称（见 `BriefClock` 里的 `stripStaleCare`）。
      */
     const val LATE_NIGHT_CARE: String = "夜深了，早点休息。"
-
-    /** 「星期三」。`DayOfWeek.value` 是 1..7 且以**周一**为 1，所以数组得按这个顺序排。 */
-    fun weekday(at: LocalDateTime): String = WEEKDAYS[at.dayOfWeek.value - 1]
-
-    private val WEEKDAYS = arrayOf(
-        "星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日",
-    )
 }

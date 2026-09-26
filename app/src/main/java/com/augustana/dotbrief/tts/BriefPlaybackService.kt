@@ -333,9 +333,14 @@ class BriefPlaybackService : Service() {
                     Log.i(TAG, "命中缓存（生成于 ${cached.lastBriefAtEpochSeconds}），直接播报，不请求模型")
                     // 缓存是上一个时刻生成的，正文开头那句"现在是……"必须换成此刻，
                     // 否则十点刷出来的内容十一点播，会念成"现在是上午十点"。
-                    // includeDate 用与现场生成同一判据：今天还没报过日期才带日期。
-                    val includeDate = cached.lastGreetedDay != LocalDate.now().toEpochDay()
-                    val text = BriefClock.refresh(cached.lastBriefText, includeDate, LocalDateTime.now(), isAlarm = isAlarm)
+                    // 开场已不含日期（见 SpokenTime），所以这里不必再传"今天第一次"这个判据 ——
+                    // 换开场只跟"此刻是几点、是不是闹钟"有关。顺带一提：升级前生成的缓存
+                    // 开头若还挂着"9月23日 星期三"，也会在这里被一起换掉。
+                    val text = BriefClock.refresh(
+                        cached.lastBriefText,
+                        LocalDateTime.now(),
+                        isAlarm = isAlarm,
+                    )
                     // 语音缓存改成"按段 + 按内容"（见 speakWithCloud）：正文段与
                     // refresh 前的原文一模一样，所以哪怕语音是一小时前合成的也照样命中，
                     // 不必再拿原文当 key。

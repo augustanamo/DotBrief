@@ -4,8 +4,10 @@ import com.augustana.dotbrief.data.ingest.AgendaEvent
 import com.augustana.dotbrief.data.ingest.BriefInput
 import com.augustana.dotbrief.data.ingest.CapturedItem
 import com.augustana.dotbrief.data.ingest.DayPart
+import com.augustana.dotbrief.data.ingest.Festival
 import com.augustana.dotbrief.data.ingest.MoonPhase
 import com.augustana.dotbrief.data.ingest.WeatherInfo
+import com.augustana.dotbrief.data.ingest.isHolidayNow
 
 /**
  * 没接大模型时的「本地简报」。
@@ -47,17 +49,12 @@ object LocalBriefComposer {
         // 每条单独成句 —— "今天是妈妈生日，结婚纪念日"这种念法是机器味。
         input.anniversaries.forEach { parts += "今天是${it.title}。" }
 
-        // 节日紧随纪念日之后：同样是"今天/临近的人情味"。今天过节单说一句祝福，
-        // 还没到的就报个倒计时（"距国庆还有 8 天"），让人心里有数、也能提前安排。
-        input.festivals.forEach { festival ->
-            parts += if (festival.daysFromNow == 0) {
-                "今天是${festival.title}。"
-            } else if (festival.daysFromNow == 1) {
-                "明天是${festival.title}。"
-            } else {
-                "距${festival.title}还有 ${festival.daysFromNow} 天。"
-            }
-        }
+        // 节日紧随纪念日之后：同样是"今天/临近的人情味"，让人心里有数、也能提前安排。
+        //
+        // 一个连休是**一条**假期（见 [com.augustana.dotbrief.data.ingest.FestivalMerge]），
+        // 所以这里一句说完"哪天过节、放几天" —— 日历里那三行"中秋节"不该念成三句话，
+        // 主人抓到的原话就是"今天是中秋节，明天是中秋节，后天也是中秋节"。
+        input.festivals.forEach { parts += "${it.describe()}。" }
 
         // 月相：一句带过，只在算得出来（非 UNKNOWN）时提。放在天气之前，
         // 因为它和"今天什么日子"是同一种语境，而不是"今天穿什么"。
@@ -186,6 +183,38 @@ object LocalBriefComposer {
                 append("。")
             }
         }
+    }
+
+    /**
+     * "今天是中秋节，今天起放 3 天假。" / "还有 2 天到国庆节，放假 8 天。"
+     *
+     * ## 为什么"过节"与"放假"要分开说
+     *
+     * 节日当天未必是假期第一天：中秋可能落在三天连休的中间，国庆也常见接在前一个周末之后。
+     * 这两件事各有各的日子，所以各说各的，而不是合成"今天是中秋假期的第二天"这种
+     * 绕口又容易算错的说法。
+     *
+     * ⚠️ [Festival.daysFromNow] 为负数表示假期还在放、节日那天已经过去了
+     * （中秋在连休中间时就会出现）。这时**绝不能**说"今天是中秋"—— 那是错的。
+     * 分流靠 [isHolidayNow]。
+     */
+    private fun Festival.describe(): String {
+        val day = when {
+            daysFromNow == 0 -> "今天是$title"
+            daysFromNow == 1 -> "明天是$title"
+            daysFromNow > 1 -> "还有 $daysFromNow 天到$title"
+            else -> "${title}已经过了"
+        }
+        // 没有连休（只有节日当天这一件事）就不提"放假"：一天假是假期还是周末，
+        // 用户自己清楚，多一句反而像在念通知。
+        if (spanDays <= 1) return day
+
+        val holiday = when {
+            startDaysFromNow == 0 -> "今天起放 $spanDays 天假"
+            isHolidayNow -> "假期一共 $spanDays 天，还在放"
+            else -> "放假 $spanDays 天"
+        }
+        return "$day，$holiday"
     }
 
     /** "下午2点30分 项目评审，在会议室A"。 */

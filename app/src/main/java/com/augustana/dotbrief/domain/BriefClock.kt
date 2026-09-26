@@ -26,12 +26,12 @@ import java.time.LocalDateTime
  * 重新生成就等于又请求一次模型，正是这一版要消掉的东西。而开场时间是**唯一**
  * 与"生成时刻"绑定的部分：日程、天气、取件码、快讯都在各自素材里带着自己的时间。
  *
- * ## 与 `includeDate` 的联动
+ * ## 升级前留下的日期
  *
- * [includeDate] 走的是与现场生成同一套规则（今天第一次开口才报日期）。
- * 因为这里是**整段替换**，日期与问候会跟着一起变：缓存生成时可能带了"9月23日 星期三"，
- * 而播的时候用户今天已经听过一遍了，这次就该只剩"下午好"——否则一天里的第二次播报
- * 会再报一遍日期。
+ * 开场句现在**不报日期**（原因见 `SpokenTime` 开头）。但这条替换仍然要认得出日期：
+ * 升级前生成的缓存正文开头可能还挂着"9月23日 星期三，早上好"，被原样念出来就是
+ * 一句早就过期的话。因为这里是**整段替换**，认出来替换掉，旧日期就顺手被清干净了
+ * —— 不需要为存量缓存单独写迁移。
  *
  * ## 深夜结尾补一句（[withLateNightCare]）
  *
@@ -50,15 +50,41 @@ object BriefClock {
     private const val PREFIX = "现在是"
 
     /**
-     * 开场句的跨度：从"现在是"或一句问候语起，到第一个句读或换行前。
+     * 所有能当开场句开头的形态 —— **只此一份**，[LEADING_OPEN] 与 [OPENING_HEAD] 共用。
      *
-     * 同时认"现在是"和各个问候语开头：缓存正文的开场可能是任一种
-     * （生成时的格式取决于来源是闹钟还是普通，见 [SpokenTime.greetingOpen]）。
-     * 定 40 字上限，是因为它只该覆盖"9月23日 星期三 上午10点"或"早上好"这种量级。
+     * 三种：
+     * - 闹钟的"现在是…"（带日期的那种也落在这一条里："现在是9月23日 星期三 上午10点"）；
+     * - 纯问候"早上好"等；
+     * - **升级前**带日期的问候"9月23日 星期三，早上好"—— 以数字开头，要单独认。
+     *
+     * 后两种日期形态现在都不再产出（见 `SpokenTime` 开头），但升级前生成的缓存正文里
+     * 还有，所以必须认得出：认不出 `refresh` 就会原样播（见它的"认不出来就原样播"），
+     * 于是"9月23日 星期三"会被一直念到十月份。
+     *
+     * ⚠️ 日期那一条**必须带上"星期"**，不能只写 `\d{1,2}月\d{1,2}日`。
+     * 两个理由：① 升级前产出的形态就是这样（见 `SpokenTime.greetingOpen` 的旧版：
+     * `"${month}月${day}日 ${weekday}，$greeting"`），带上星期才认的是**我们自己写过的那种**；
+     * ② 只认日期的话，正文里"9月30日的截止日期快到了。……"这种以日期开头的句子
+     * 也会被当成开场换掉，把内容吃掉一截 —— 那是真的丢东西。
+     *
+     * ⚠️ 这份清单**曾经是两份**：[LEADING_OPEN]（换开场）与 [OPENING_HEAD]（切开场送
+     * 语音合成）各写了一遍字面量，而"日期形态"当初只加进了后者 —— 结果
+     * `splitOpening` 认得出、`refresh` 认不出，升级前的缓存被照着一字不改地念出来。
+     * 一处定义、两处引用，就不会再犯。
+     */
+    private const val OPENING_HEADS =
+        "现在是|早上好|上午好|中午好|下午好|晚上好|早安|晚安" +
+            "|\\d{1,2}月\\d{1,2}日[\\s　]*星期[一二三四五六日天]"
+
+    /**
+     * 开场句的跨度：从上面任一开头起，到第一个句读或换行前。
+     *
+     * 定 40 字上限，是因为它只该覆盖"9月23日 星期三 上午10点"（**升级前**的形态）
+     * 或"早上好"这种量级。
      * 上限的用法见 [refresh] —— **匹配吃满上限时宁可不动**，
      * 否则会把一句没有标点的长句切成"新时间 + 旧残句"两半。
      */
-    private val LEADING_OPEN = Regex("^(现在是|早上好|上午好|中午好|下午好|晚上好|早安|晚安)[^，。！？\\n]{0,40}")
+    private val LEADING_OPEN = Regex("^($OPENING_HEADS)[^，。！？\\n]{0,40}")
 
     /** 时间句的合法收尾。匹配停在这些字符之前，才算"认出了时间句"。 */
     private val STOPPERS = charArrayOf('，', '。', '！', '？', '\n')
@@ -93,19 +119,17 @@ object BriefClock {
     private val SENTENCE_END_CHARS = charArrayOf('。', '！', '？', '\n')
 
     /**
-     * 能被认成"开场句"的开头。
+     * 正文**是不是以开场句开头**（[splitOpening] 用）。
      *
-     * 三种形态（见 [SpokenTime.nowText] / [SpokenTime.greetingOpen]）：
-     * - 闹钟的"现在是…"；
-     * - 纯问候"早上好"等；
-     * - 带日期的问候"9月23日 星期三，早上好"—— 以数字开头，所以要单独认出来。
+     * 清单与 [LEADING_OPEN] 共用一份 [OPENING_HEADS] —— 不肯各写一份的理由见那里。
      */
-    private val OPENING_HEAD = Regex("^(现在是|早上好|上午好|中午好|下午好|晚上好|早安|晚安|\\d{1,2}月\\d{1,2}日)")
+    private val OPENING_HEAD = Regex("^($OPENING_HEADS)")
 
     /**
      * 开场句的长度上限。
      *
-     * 最长的形态是闹钟那句："现在是9月23日 星期三 上午10点52分。"，22 字。
+     * 最长的形态是**旧缓存**里带日期的闹钟那句："现在是9月23日 星期三 上午10点52分。"，22 字。
+     * 新产出的开场短得多（"现在是上午10点52分。"），但这个上限是按存量缓存放的。
      * 定 30 是留一点余量；真越过它说明认出来的压根不是开场句，宁可不切。
      */
     private const val OPENING_MAX_CHARS = 30
@@ -117,11 +141,10 @@ object BriefClock {
 
     /**
      * @param text 缓存里的正文
-     * @param includeDate 今天还没报过日期时为真（与现场生成同一判据）
      * @param at 此刻
      * @param isAlarm 定时播报（闹钟）为真：开场说具体时间；否则只说问候语
      */
-    fun refresh(text: String, includeDate: Boolean, at: LocalDateTime, isAlarm: Boolean = false): String {
+    fun refresh(text: String, at: LocalDateTime, isAlarm: Boolean = false): String {
         val match = LEADING_OPEN.find(text) ?: return withLateNightCare(text, at.hour)
         // 匹配结束的位置必须是个句读（或正好是结尾）。
         // 不是的话说明这开头压根没有"时间句"的形状（比如一句没有标点的长句子），
@@ -137,12 +160,12 @@ object BriefClock {
         var tail = text.substring(match.range.last + 1)
         val newOpen = if (isAlarm) {
             // 闹钟：说具体时间（"现在是上午7点"），像闹钟报时。
-            PREFIX + SpokenTime.nowText(includeDate, at)
+            PREFIX + SpokenTime.nowText(at)
         } else {
             // 非闹钟：去掉尾巴里的旧问候（"现在是10点，早上好" → "下午好"，
             // 不去就变成"下午好，早上好"），再拼上新问候语。
             tail = STALE_TAIL_GREETING.replaceFirst(tail, "")
-            SpokenTime.greetingOpen(includeDate, at)
+            SpokenTime.greetingOpen(at)
         }
         val replaced = newOpen + tail
         val fixed = fixGreeting(replaced, at.hour)

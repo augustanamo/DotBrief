@@ -71,7 +71,7 @@ class GenerateBriefUseCase(
     private val context: Context,
     private val settingsRepository: SettingsRepository,
     private val capturedNotificationDao: CapturedNotificationDao,
-    /** 只读它的两个时间戳：上次"听完"的时刻决定点阵颜色，上次"报过日期"的那天决定开场要不要报日期。 */
+    /** 只读它的两个时间戳：上次"听完"的时刻决定点阵颜色，上次播报的那天决定"今天是不是第一次"。 */
     private val runtimeStateStore: RuntimeStateStore,
     private val calendarSource: CalendarSource = CalendarSource(context),
     private val rssSource: RssSource = RssSource(),
@@ -208,9 +208,9 @@ class GenerateBriefUseCase(
         val now = Instant.now().epochSecond
         val warnings = mutableListOf<String>()
 
-        // 今天是不是第一次开口 —— 决定开场报不报"今天几月几号"。
-        // 判据是"上次报过日期的那天是不是今天"，跨天自然失效，不需要任何定时任务。
-        val includeDate = runtimeStateStore.snapshot().lastGreetedDay != LocalDate.now().toEpochDay()
+        // 今天是不是第一次开口 —— 现在只决定**日出日落说一次**（开场已不报日期）。
+        // 判据是"上次播报的那天是不是今天"，跨天自然失效，不需要任何定时任务。
+        val firstOfDay = runtimeStateStore.snapshot().lastGreetedDay != LocalDate.now().toEpochDay()
 
         // 这次开口落在一天里的哪一段 —— 天气说今天还是说明天由它决定（见 [DayPart]）。
         // 与 includeDate 一样在这里算一次就交给下游：交给"念素材"的两条链路各算一遍，
@@ -264,12 +264,12 @@ class GenerateBriefUseCase(
         }
 
         // 天气与模型无关：它是"照抄即可"的事实，没接模型时也照抓。
-        // 日出日落只在今天第一次播报时带上，所以把 includeDate 一并传进去。
+        // 日出日落只在今天第一次播报时带上，所以把 firstOfDay 一并传进去。
         val weatherJob = async(Dispatchers.IO) {
             if (BriefSource.WEATHER !in sources) {
                 null to null
             } else {
-                weatherSource.fetch(includeSunTimes = includeDate)
+                weatherSource.fetch(includeSunTimes = firstOfDay)
             }
         }
 
@@ -315,11 +315,11 @@ class GenerateBriefUseCase(
         val isAlarm = source == SOURCE_ALARM
         BriefInput(
             nowText = if (isAlarm) {
-                "现在是" + SpokenTime.nowText(includeDate, at)
+                "现在是" + SpokenTime.nowText(at)
             } else {
-                SpokenTime.greetingOpen(includeDate, at)
+                SpokenTime.greetingOpen(at)
             },
-            includeDate = includeDate,
+            firstOfDay = firstOfDay,
             dayPart = dayPart,
             lateNightHint = SpokenTime.lateNightCare(at.hour),
             anniversaries = anniversaries,

@@ -8,28 +8,30 @@ package com.augustana.dotbrief.data.ingest
  */
 data class BriefInput(
     /**
-     * 开场白：闹钟场景是"现在是9月23日 星期三 下午3点20分"（报时），
-     * 其余场景是"下午好"或"9月23日 星期三，下午好"（问候语，不说具体几点）。
+     * 开场白：闹钟场景是"现在是下午3点20分"（报时），
+     * 其余场景是"下午好"（问候语，不说具体几点）。
      *
-     * 日期部分是**可选的**：今天已经听过一次之后，它不再带日期 ——
-     * 同一天里把"今天是几月几号"重复念给同一个人听，是纯噪音。
-     * 判断依据见 [includeDate]，开场形态见
-     * [com.augustana.dotbrief.data.ingest.SpokenTime.nowText] /
+     * **一律不带日期**：简报天天听，报"今天是几月几号"是把用户瞄一眼手机就知道的
+     * 信息念一遍，而且会让开场句的语音缓存每天失效一次。理由见
+     * [com.augustana.dotbrief.data.ingest.SpokenTime] 开头。
+     * 开场形态见 [com.augustana.dotbrief.data.ingest.SpokenTime.nowText] /
      * [com.augustana.dotbrief.data.ingest.SpokenTime.greetingOpen]。
      */
     val nowText: String,
     /**
      * 今天是不是**第一次**播报。
      *
-     * 与 [nowText] 里有没有日期是同一件事的两种表达：这里给模型下明确指令
-     * （"开场要报日期" / "别再报日期"），[nowText] 负责把事实摆对，
-     * 两者都来自 `runtime.last_greeted_day` 与今天的一次比较。
+     * 只用于一件事：**日出日落一天只说一次**（见
+     * [com.augustana.dotbrief.data.ingest.WeatherSource.fetch] 的 `includeSunTimes`）。
+     * 它曾经还管"开场报不报日期"，那个用途已经去掉（见 [nowText]）。
+     *
+     * 判据是 `runtime.last_greeted_day` 与今天的一次比较，跨天自然失效。
      */
-    val includeDate: Boolean,
+    val firstOfDay: Boolean,
     /**
      * 这次开口是白天还是入夜 —— 决定天气说今天还是说明天（见 [DayPart]）。
      *
-     * 与 [includeDate] 是两种不同尺度的"时间语境"：那个管**一天里的第一次**开口，
+     * 与 [firstOfDay] 是两种不同尺度的"时间语境"：那个管**一天里的第一次**开口，
      * 这个管**一天里的哪一段**开口。两者都在 `GenerateBriefUseCase` 取数时算好，
      * 下游两条链路（交给模型的素材 / 本地简报）只读不算 ——
      * 同一时刻各算一遍，迟早会出现两种链路说法不一致。
@@ -249,12 +251,40 @@ data class NewsItem(
 )
 
 /**
- * 一个临近的节日（来自系统日历的"中国节假日"订阅，见 [CalendarSource.upcomingFestivals]）。
+ * 一次节日假期（来自系统日历的"中国节假日"订阅，见 [CalendarSource.upcomingFestivals]）。
  *
- * [daysFromNow] 是距今天数：0 = 今天，1 = 明天，N = 还有 N 天。
- * 播报时"今天是中秋节"（0）和"距国庆还有 8 天"（N）是两种说法，由读它的地方分流。
+ * ## 为什么是"假期"而不是"节日那几天里的某一天"
+ *
+ * 节假日在日历里是**一天一个全天事件**：中秋放三天就是三行。所以要由
+ * [FestivalMerge] 合并成一条 —— 否则会念出"今天是中秋节，明天是中秋节，
+ * 后天也是中秋节"，同一件事说三遍，还听不出哪天是正日子。
+ *
+ * ## 三个字段各自回答一个问题
+ *
+ * - [daysFromNow]：**哪天过节**（0 = 今天，N = 还有 N 天）—— "今天是中秋节"；
+ * - [spanDays]：**连着放几天**（1 = 只有节日当天，没有连休）—— "放三天"；
+ * - [startDaysFromNow]：**假期从哪天开始**（0 = 今天就开始放）——
+ *   节日当天未必是假期第一天（中秋可能落在三天连休的中间）。
+ *
+ * 播报时怎么组合这三个数（"今天开始放假""还有三天到中秋"）由读它的地方分流，
+ * 数据这一侧只放事实。
  */
 data class Festival(
     val title: String,
+    /** 节日当天距今天数：0 = 今天，1 = 明天，N = 还有 N 天。可能是负数（假期还没放完、节日已过）。 */
     val daysFromNow: Int,
+    /** 连着放假的天数。1 = 没有连休，只有节日当天。 */
+    val spanDays: Int = 1,
+    /** 假期第一天距今天数：0 = 今天就开始放。没有连休时与 [daysFromNow] 相同。 */
+    val startDaysFromNow: Int = daysFromNow,
 )
+
+/**
+ * 今天还在这个假期里（含第一天与最后一天）。
+ *
+ * ⚠️ 它**不等于**"今天是节日当天"：中秋可能落在三天连休的中间，那时节日已经过了、
+ * 假还在放。说成"今天是中秋节"是错的，说成"中秋假期还在放"才对 ——
+ * 两种说法的分流靠这个属性。
+ */
+val Festival.isHolidayNow: Boolean
+    get() = startDaysFromNow <= 0 && startDaysFromNow + spanDays > 0

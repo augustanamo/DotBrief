@@ -3,8 +3,10 @@ package com.augustana.dotbrief.data.llm
 import com.augustana.dotbrief.data.ingest.BriefInput
 import com.augustana.dotbrief.data.ingest.DayForecast
 import com.augustana.dotbrief.data.ingest.DayPart
+import com.augustana.dotbrief.data.ingest.Festival
 import com.augustana.dotbrief.data.ingest.MoonPhase
 import com.augustana.dotbrief.data.ingest.WeatherInfo
+import com.augustana.dotbrief.data.ingest.isHolidayNow
 import com.augustana.dotbrief.data.settings.Defaults
 import com.augustana.dotbrief.data.settings.UserSettings
 
@@ -53,16 +55,10 @@ object PromptBuilder {
                 "（开场只说素材里的时段问候语，不要报具体几点几分。）"
             },
         )
-        // 日期只在今天第一次说。素材里的开场本身就体现了这一点
-        // （第二次之后那里没有日期），这里再给它一条**明确指令**：
-        // 不写清楚的话，模型很爱自己按"今天"脑补出一个日期，而且经常差一天。
-        appendLine(
-            if (input.includeDate) {
-                "（这是今天第一次播报：开场要把今天是几月几号、星期几说出来。）"
-            } else {
-                "（今天已经播报过了：开场不要再报日期和星期，也不要自己猜今天几号。）"
-            },
-        )
+        // 日期一律不报。素材里压根没有日期（见 SpokenTime 开头），但**必须**给一条明确指令：
+        // 不写清楚的话，模型很爱自己按"今天"脑补出一个日期，而且经常差一天 ——
+        // 那是这条播报里最容易出错、又最没用的信息（用户瞄一眼手机就知道）。
+        appendLine("（绝不报日期和星期，也不要自己猜今天几号。）")
         appendLine()
 
         if (input.anniversaries.isNotEmpty()) {
@@ -72,13 +68,12 @@ object PromptBuilder {
         }
 
         if (input.festivals.isNotEmpty()) {
-            appendLine("【临近节日】（今天过节就单独祝福一句；还没到的就说还有几天，别报具体日期）")
-            input.festivals.forEach { festival ->
-                appendLine(
-                    if (festival.daysFromNow == 0) "- 今天是${festival.title}"
-                    else "- 距${festival.title}还有 ${festival.daysFromNow} 天",
-                )
-            }
+            // ⚠️ "只说一次"这条要求必须写出来。日历里一个连休是**一天一行**，
+            // 素材这边已经合并成一条假期（见 FestivalMerge），但模型看到"中秋"两个字
+            // 仍可能自己按天发挥一遍 —— 主人抓到的原话正是
+            // "今天是中秋节，明天是中秋节，后天也是中秋节"。
+            appendLine("【节日假期】（一个节日只说一次，不要按天重复说；不要报具体日期）")
+            input.festivals.forEach { appendLine("- ${it.materialLine()}") }
             appendLine()
         }
 
@@ -166,6 +161,32 @@ object PromptBuilder {
         }
 
         append("直接输出要念的正文。")
+    }
+
+    /**
+     * 节日的素材行：一行说清"哪天过节、放几天、是不是已经放假了"。
+     *
+     * 只给事实，成句交给模型（与天气的 [promptLines] 同一个理由）。
+     * "一个节日只说一次"写在段标题上，不写在每一行里 —— 那是文风要求，不是事实。
+     *
+     * ⚠️ [Festival.daysFromNow] 可能是负数：中秋落在三天连休的中间时，
+     * 假期还在放、节日那天已经过去了。那种情况**不能**写成"今天是$title"。
+     */
+    private fun Festival.materialLine(): String {
+        val day = when {
+            daysFromNow == 0 -> "今天是$title"
+            daysFromNow == 1 -> "明天是$title"
+            daysFromNow > 1 -> "还有 $daysFromNow 天到$title"
+            else -> "$title 已经过了（${-daysFromNow} 天前）"
+        }
+        if (spanDays <= 1) return day
+
+        val holiday = when {
+            startDaysFromNow == 0 -> "今天起放假，连着 $spanDays 天"
+            isHolidayNow -> "假期一共 $spanDays 天，还在放"
+            else -> "放假 $spanDays 天"
+        }
+        return "$day｜$holiday"
     }
 
     /**
