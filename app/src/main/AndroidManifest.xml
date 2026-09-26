@@ -24,6 +24,18 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- 定时播报（当闹钟用）：要精确到点，而且要在锁屏 / Doze 下也响得起来。
+         两个都声明是有意的：
+           - USE_EXACT_ALARM（API 33+）装机即授予、用户撤不掉 —— "到点出声"是这个
+             应用的核心功能，不该让用户为了让它准点响再去翻一层系统设置；
+           - SCHEDULE_EXACT_ALARM（API 31+）管低版本、以及用户在系统设置里动过的场景。
+             代码里每次都查 canScheduleExactAlarms()，没拿到就降级到 WorkManager
+             （仍会响，只是可能晚几分钟）。
+         ⚠️ USE_EXACT_ALARM 受 Google Play 政策限制（仅限闹钟 / 日历类应用）。
+            本应用自用分发、不在其管辖范围；**将来若要上架，这一条必须重新评估**。 -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+
     <!-- 桌面小组件刷新 -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
@@ -71,6 +83,27 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/brief_widget_info" />
+        </receiver>
+
+        <!-- 定时播报的触发点。
+             必须是**静态注册**：闹钟到点时应用进程多半不在（手机锁屏放了一夜），
+             动态注册的接收器根本没人收得到 —— 那一刻连一行代码都跑不起来。
+             收到后拉起前台服务出声，再把下一次排上。 -->
+        <receiver
+            android:name=".data.update.BriefAlarmReceiver"
+            android:exported="false" />
+
+        <!-- 开机 / 覆盖安装后重排定时播报。
+             ⚠️ AlarmManager 的闹钟**不跨重启** —— WorkManager 自带的重启恢复没有了，
+             这一棒得自己接。缺了它，重启一次定时播报就永久失效（直到用户手动开一次
+             设置页），而"重启后闹钟不响"用户几乎不可能联想到是这里的问题。 -->
+        <receiver
+            android:name=".data.update.SchedulerRestoreReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
         </receiver>
 
         <!-- 动画帧供给方：桌面通过 BIND_REMOTEVIEWS 权限访问，只暴露 adapter 数据 -->
